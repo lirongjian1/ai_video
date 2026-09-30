@@ -59,7 +59,7 @@ function applyVideoProtocol(protocol = form.video_protocol) {
   if (protocol !== 'COMFYUI') return
   if (!form.provider || form.provider === 'AutoDL') form.provider = 'AutoDL ComfyUI'
   if (!form.base_url || form.base_url.includes('/contents/generations/tasks')) form.base_url = 'https://autodl.art/api/v1/comfyui/comfyui_workflow'
-  if (form.extraConfigText.trim() === '{}') form.extraConfigText = JSON.stringify({ video_options: { resolution: '768p竖' }, poll_interval: 3 }, null, 2)
+  if (form.extraConfigText.trim() === '{}') form.extraConfigText = JSON.stringify({ video_options: { resolution: '768p竖' }, reference_field_template: 'ref_image_{index}', poll_interval: 3 }, null, 2)
 }
 
 function changeModelType(value: ModelConfig['model_type']) {
@@ -127,7 +127,7 @@ onActivated(loadData)
       <el-form label-position="top">
         <div class="form-grid"><el-form-item label="配置名称" required><el-input v-model="form.name" /></el-form-item><el-form-item label="模型类型" required><el-select v-model="form.model_type" style="width: 100%" @change="changeModelType"><el-option v-for="item in modelTypes" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item></div>
         <el-form-item v-if="form.model_type === 'VIDEO'" label="视频接口协议" required><el-select v-model="form.video_protocol" style="width: 100%" @change="applyVideoProtocol"><el-option v-for="item in videoProtocols" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-        <div class="form-grid"><el-form-item label="厂商" required><el-input v-model="form.provider" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'AutoDL ComfyUI' : '例如 OpenAI Compatible'" /></el-form-item><el-form-item :label="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? '工作流 ID' : '模型名称'" required><el-input v-model="form.model_name" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? '例如 minimax_h3_lightx2v_no_pic' : '厂商提供的模型 ID'" /></el-form-item></div>
+        <div class="form-grid"><el-form-item label="厂商" required><el-input v-model="form.provider" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'AutoDL ComfyUI' : '例如 OpenAI Compatible'" /></el-form-item><el-form-item :label="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? '工作流 ID' : '模型名称'" required><el-input v-model="form.model_name" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? '例如 minimax_h3_image_audio_to_video_v2_15s' : '厂商提供的模型 ID'" /></el-form-item></div>
         <el-form-item :label="form.model_type === 'VIDEO' ? '任务提交地址' : '接口地址'"><el-input v-model="form.base_url" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'https://autodl.art/api/v1/comfyui/comfyui_workflow' : 'https://api.example.com/v1'" /></el-form-item>
         <el-form-item :label="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'ComfyUI Token' : 'API Key'"><el-input v-model="form.api_key" type="password" show-password autocomplete="new-password" :placeholder="editingId ? '留空则保留当前 Key' : '输入模型服务 API Key'" /></el-form-item>
         <el-form-item label="API Key 环境变量"><el-input v-model="form.api_key_env" placeholder="可选，例如 OPENAI_API_KEY" /></el-form-item>

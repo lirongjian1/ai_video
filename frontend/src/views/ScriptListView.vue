@@ -34,7 +34,14 @@ const storyboards = ref<Storyboard[]>([])
 const scenes = ref<Scene[]>([])
 const characters = ref<Character[]>([])
 const boardForm = reactive({ sequence: 1, title: '', description: '', duration: null as number | null, camera: '', dialogue: '', video_prompt: '', scene_id: null as number | null, character_ids: [] as number[], status: 'DRAFT' as Storyboard['status'] })
-const videoForm = reactive({ model_config_id: null as number | null, reference_file_id: null as number | null })
+const videoForm = reactive({
+  model_config_id: null as number | null,
+  reference_file_ids: [] as number[],
+  duration: 10,
+  resolution: '768p竖',
+  seed: null as number | null,
+})
+const maxReferenceImages = 9
 
 function projectName(id: number) { return projects.value.find((item) => item.id === id)?.name || `项目 #${id}` }
 function sceneName(id: number | null) { return id ? scenes.value.find((item) => item.id === id)?.name || `场景 #${id}` : '未关联' }
@@ -158,8 +165,32 @@ async function removeBoard(item: Storyboard) {
 function openVideoGenerate(item: Storyboard | null) {
   const defaultModel = videoModels.value.find((model) => model.is_default) || videoModels.value[0]
   videoTarget.value = item
-  Object.assign(videoForm, { model_config_id: defaultModel?.id || null, reference_file_id: item?.reference_file_ids[0] || null })
+  Object.assign(videoForm, {
+    model_config_id: defaultModel?.id || null,
+    reference_file_ids: [...(item?.reference_file_ids || [])].slice(0, maxReferenceImages),
+    duration: Math.min(15, Math.max(1, Math.round(item?.duration || 10))),
+    resolution: '768p竖',
+    seed: null,
+  })
   videoDialogVisible.value = true
+}
+
+function selectedImageOrder(fileId: number) {
+  const index = videoForm.reference_file_ids.indexOf(fileId)
+  return index < 0 ? 0 : index + 1
+}
+
+function toggleReferenceImage(fileId: number) {
+  const index = videoForm.reference_file_ids.indexOf(fileId)
+  if (index >= 0) {
+    videoForm.reference_file_ids.splice(index, 1)
+    return
+  }
+  if (videoForm.reference_file_ids.length >= maxReferenceImages) {
+    ElMessage.warning(`最多选择 ${maxReferenceImages} 张参考图片`)
+    return
+  }
+  videoForm.reference_file_ids.push(fileId)
 }
 
 async function submitVideoGeneration() {
@@ -168,7 +199,14 @@ async function submitVideoGeneration() {
   if (!targets.length) return ElMessage.warning('当前剧本没有可生成的分镜')
   videoSubmitting.value = true
   try {
-    await Promise.all(targets.map((item) => http.post(`/storyboards/${item.id}/generate-video`, { model_config_id: videoForm.model_config_id, reference_file_id: videoForm.reference_file_id })))
+    const payload = {
+      model_config_id: videoForm.model_config_id,
+      reference_file_ids: videoForm.reference_file_ids,
+      duration: videoForm.duration,
+      resolution: videoForm.resolution,
+      seed: videoForm.seed,
+    }
+    await Promise.all(targets.map((item) => http.post(`/storyboards/${item.id}/generate-video`, payload)))
     ElMessage.success(`${targets.length} 个视频生成任务已加入队列`)
     videoDialogVisible.value = false
   } catch (error) { ElMessage.error(errorMessage(error, '创建视频任务失败')) } finally { videoSubmitting.value = false }
@@ -222,11 +260,46 @@ onActivated(loadData)
       <template #footer><el-button @click="boardDialogVisible = false">取消</el-button><el-button type="primary" :loading="boardSaving" @click="saveBoard">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="videoDialogVisible" :title="videoTarget ? `生成视频 · ${videoTarget.title}` : '生成全部分镜视频'" width="min(560px, calc(100vw - 32px))" append-to-body>
-      <el-form label-position="top"><el-form-item label="视频模型" required><el-select v-model="videoForm.model_config_id" placeholder="请选择视频模型" style="width: 100%"><el-option v-for="item in videoModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item label="参考图片"><el-select v-model="videoForm.reference_file_id" clearable filterable placeholder="可选，选择主体或场景参考图" style="width: 100%"><el-option v-for="item in images" :key="item.id" :label="item.file_name" :value="item.id" /></el-select></el-form-item></el-form>
+    <el-dialog v-model="videoDialogVisible" :title="videoTarget ? `生成视频 · ${videoTarget.title}` : '生成全部分镜视频'" width="min(760px, calc(100vw - 32px))" append-to-body>
+      <el-form label-position="top">
+        <el-form-item label="视频模型" required><el-select v-model="videoForm.model_config_id" placeholder="请选择视频模型" style="width: 100%"><el-option v-for="item in videoModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <div class="video-option-grid">
+          <el-form-item label="视频时长（秒）"><el-input-number v-model="videoForm.duration" :min="1" :max="15" controls-position="right" style="width: 100%" /></el-form-item>
+          <el-form-item label="输出分辨率"><el-select v-model="videoForm.resolution" style="width: 100%"><el-option label="480p 竖屏" value="480p竖" /><el-option label="768p 竖屏" value="768p竖" /><el-option label="480p 横屏" value="480p横" /><el-option label="768p 横屏" value="768p横" /></el-select></el-form-item>
+          <el-form-item label="随机种子"><el-input-number v-model="videoForm.seed" placeholder="随机" controls-position="right" style="width: 100%" /></el-form-item>
+        </div>
+        <el-form-item label="参考图片">
+          <div class="image-picker">
+            <div class="image-picker-toolbar"><span>已选 {{ videoForm.reference_file_ids.length }} / {{ maxReferenceImages }}</span><el-button v-if="videoForm.reference_file_ids.length" text type="primary" @click="videoForm.reference_file_ids = []">清空</el-button></div>
+            <el-empty v-if="!images.length" description="图片库暂无图片" :image-size="68" />
+            <div v-else class="image-option-grid">
+              <button v-for="item in images" :key="item.id" class="image-option" :class="{ selected: selectedImageOrder(item.id) }" type="button" :aria-label="`${selectedImageOrder(item.id) ? '取消选择' : '选择'} ${item.file_name}`" @click="toggleReferenceImage(item.id)">
+                <el-image :src="item.thumbnail_url || item.url" fit="cover" loading="lazy" />
+                <span v-if="selectedImageOrder(item.id)" class="image-order">{{ selectedImageOrder(item.id) }}</span>
+                <span class="image-name" :title="item.file_name">{{ item.file_name }}</span>
+              </button>
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
       <template #footer><el-button @click="videoDialogVisible = false">取消</el-button><el-button type="primary" :icon="VideoPlay" :loading="videoSubmitting" @click="submitVideoGeneration">加入视频队列</el-button></template>
     </el-dialog>
   </div>
 </template>
 
-<style scoped>.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } .drawer-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; } .board-heading { display: grid; grid-template-columns: 110px 1fr 140px; gap: 14px; } @media (max-width: 680px) { .form-grid, .board-heading { grid-template-columns: 1fr; gap: 0; } }</style>
+<style scoped>
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.drawer-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.board-heading { display: grid; grid-template-columns: 110px 1fr 140px; gap: 14px; }
+.video-option-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.image-picker { width: 100%; overflow: hidden; border: 1px solid #dfe4e0; border-radius: 6px; }
+.image-picker-toolbar { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 12px; color: #707872; font-size: 12px; border-bottom: 1px solid #e5e9e6; }
+.image-option-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; max-height: 320px; padding: 12px; overflow-y: auto; }
+.image-option { position: relative; min-width: 0; padding: 4px; color: #424943; background: #fff; border: 1px solid #dfe4e0; border-radius: 6px; cursor: pointer; }
+.image-option:hover { border-color: #84ad99; }
+.image-option.selected { border-color: #2f7d5c; box-shadow: 0 0 0 2px rgb(47 125 92 / 14%); }
+.image-option :deep(.el-image) { display: block; width: 100%; aspect-ratio: 1; background: #eef1ef; border-radius: 3px; }
+.image-order { position: absolute; top: 8px; right: 8px; display: grid; width: 22px; height: 22px; place-items: center; color: #fff; background: #2f7d5c; border: 2px solid #fff; border-radius: 50%; font-size: 11px; font-weight: 700; }
+.image-name { display: block; padding: 6px 3px 3px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 680px) { .form-grid, .board-heading, .video-option-grid { grid-template-columns: 1fr; gap: 0; } .image-option-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+</style>
