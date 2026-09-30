@@ -146,8 +146,10 @@ onActivated(loadUsers)
 
     <section class="content-panel table-panel">
       <el-table v-loading="loading" :data="pagedUsers" empty-text="暂无用户">
-        <el-table-column prop="username" label="用户名" min-width="150" />
-        <el-table-column prop="nickname" label="昵称" min-width="160"><template #default="{ row }"><span :class="{ muted: !row.nickname }">{{ row.nickname || '未设置' }}</span></template></el-table-column>
+        <el-table-column prop="username" label="用户名" min-width="130" />
+        <el-table-column prop="email" label="登录邮箱" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="nickname" label="昵称" min-width="120"><template #default="{ row }"><span :class="{ muted: !row.nickname }">{{ row.nickname || '未设置' }}</span></template></el-table-column>
+        <el-table-column label="角色" width="100"><template #default="{ row }"><el-tag :type="row.role === 'ADMIN' ? 'warning' : 'info'" effect="plain">{{ row.role === 'ADMIN' ? '管理员' : '普通用户' }}</el-tag></template></el-table-column>
         <el-table-column label="状态" width="130">
           <template #default="{ row }"><el-switch :model-value="row.status === 'ENABLED'" :disabled="row.id === auth.user?.id" inline-prompt active-text="启用" inactive-text="禁用" @change="(value: string | number | boolean) => toggleStatus(row, value)" /></template>
         </el-table-column>

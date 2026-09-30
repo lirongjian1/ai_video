@@ -13,7 +13,7 @@ const routes = [
       { path: '', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '工作台' } },
       { path: 'projects', name: 'projects', component: () => import('@/views/ProjectListView.vue'), meta: { title: '项目管理' } },
       { path: 'files', name: 'files', component: () => import('@/views/FileListView.vue'), meta: { title: '文件管理' } },
-      { path: 'users', name: 'users', component: () => import('@/views/UserListView.vue'), meta: { title: '用户管理' } },
+      { path: 'users', name: 'users', component: () => import('@/views/UserListView.vue'), meta: { title: '用户管理', adminOnly: true } },
       { path: 'prompts', name: 'prompts', component: () => import('@/views/PromptListView.vue'), meta: { title: '提示词管理' } },
       { path: 'images', name: 'images', component: () => import('@/views/AssetLibraryView.vue'), props: { fileType: 'IMAGE' }, meta: { title: '图片管理' } },
       { path: 'characters', name: 'characters', component: () => import('@/views/CreativeEntityView.vue'), props: { entityType: 'characters' }, meta: { title: '角色管理' } },
@@ -23,7 +23,7 @@ const routes = [
       { path: 'videos', name: 'videos', component: () => import('@/views/AssetLibraryView.vue'), props: { fileType: 'VIDEO' }, meta: { title: '视频管理' } },
       { path: 'video-merge', name: 'video-merge', component: () => import('@/views/VideoMergeView.vue'), meta: { title: '视频合成' } },
       { path: 'models', name: 'models', component: () => import('@/views/ModelConfigView.vue'), meta: { title: '模型管理' } },
-      { path: 'secrets', name: 'secrets', component: () => import('@/views/SecretManageView.vue'), meta: { title: '密钥管理' } },
+      { path: 'secrets', name: 'secrets', component: () => import('@/views/SecretManageView.vue'), meta: { title: '密钥管理', adminOnly: true } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -38,6 +38,15 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && hasSession) return { name: 'dashboard' }
+  // 管理员专属页面：普通用户直接退回工作台
+  if (to.meta.adminOnly) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', data.session!.user.id)
+      .single()
+    if (profile?.role !== 'ADMIN') return { name: 'dashboard' }
+  }
 })
 
 router.afterEach((to: RouteLocationNormalized) => {

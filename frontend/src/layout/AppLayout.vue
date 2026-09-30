@@ -31,6 +31,8 @@ interface MenuEntry {
   path: string
   title: string
   icon: Component
+  /** 仅管理员可见 */
+  adminOnly?: boolean
 }
 
 const menuItems: MenuEntry[] = [
@@ -44,8 +46,8 @@ const menuItems: MenuEntry[] = [
   { path: '/videos', title: '视频管理', icon: Film },
   { path: '/video-merge', title: '视频合成', icon: MenuIcon },
   { path: '/models', title: '模型管理', icon: Setting },
-  { path: '/secrets', title: '密钥管理', icon: Key },
-  { path: '/users', title: '用户管理', icon: User },
+  { path: '/secrets', title: '密钥管理', icon: Key, adminOnly: true },
+  { path: '/users', title: '用户管理', icon: User, adminOnly: true },
 ]
 
 const collapsed = ref(false)
@@ -56,6 +58,9 @@ const tabs = useTabsStore()
 const taskStore = useTaskStore()
 const { activeCount } = storeToRefs(taskStore)
 const currentTitle = computed(() => String(route.meta.title || '工作台'))
+const isAdmin = computed(() => auth.user?.role === 'ADMIN')
+/** 普通用户不显示管理类菜单。 */
+const visibleMenuItems = computed(() => menuItems.filter((item) => !item.adminOnly || isAdmin.value))
 const taskDrawerVisible = ref(false)
 let taskRefreshTimer: ReturnType<typeof setInterval> | undefined
 
@@ -110,7 +115,7 @@ onUnmounted(() => clearInterval(taskRefreshTimer))
           <el-icon><HomeFilled /></el-icon>
           <template #title>工作台</template>
         </el-menu-item>
-        <el-menu-item v-for="item in menuItems" :key="item.path" :index="item.path">
+        <el-menu-item v-for="item in visibleMenuItems" :key="item.path" :index="item.path">
           <el-icon><component :is="item.icon" /></el-icon>
           <template #title>{{ item.title }}</template>
         </el-menu-item>
