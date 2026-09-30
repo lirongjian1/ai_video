@@ -1,0 +1,21 @@
+{
+  "include": [
+    "app",
+    "tests",
+    "alembic"
+  ],
+  "exclude": [
+    "__pycache__",
+    ".pytest_cache"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "."
+      ]
+    }
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic"
+}

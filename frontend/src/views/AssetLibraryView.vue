@@ -1,0 +1,159 @@
+<script setup lang="ts">
+import { CopyDocument, Delete, Download, Edit, MagicStick, Plus, Search, View } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
+import { computed, onActivated, reactive, ref, watch } from 'vue'
+
+import { errorMessage, http } from '@/api/http'
+import type { AiFile, ModelConfig, PageResult, Project, Prompt } from '@/types'
+
+const props = defineProps<{ fileType: 'IMAGE' | 'VIDEO' }>()
+const isImage = computed(() => props.fileType === 'IMAGE')
+const title = computed(() => isImage.value ? '图片管理' : '视频管理')
+const noun = computed(() => isImage.value ? '图片' : '视频')
+const loading = ref(false)
+const uploading = ref(false)
+const generating = ref(false)
+const uploadVisible = ref(false)
+const generateVisible = ref(false)
+const previewVisible = ref(false)
+const previewFile = ref<AiFile | null>(null)
+const uploadFiles = ref<UploadUserFile[]>([])
+const uploadProjectId = ref<number | null>(null)
+const files = ref<AiFile[]>([])
+const projects = ref<Project[]>([])
+const prompts = ref<Prompt[]>([])
+const imageModels = ref<ModelConfig[]>([])
+const total = ref(0)
+const filters = reactive({ keyword: '', sourceType: '', projectId: null as number | null, page: 1, pageSize: 20 })
+const generateForm = reactive({ project_id: null as number | null, prompt_id: null as number | null, name: '', model_config_id: null as number | null, size: '1024x1024' })
+const sourceLabels: Record<AiFile['source_type'], string> = { UPLOAD: '手动上传', AI_IMAGE: 'AI 生成', AI_VIDEO: 'AI 生成', VIDEO_MERGE: '视频合成' }
+
+function formatSize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+function projectName(id: number | null) { return id ? projects.value.find((item) => item.id === id)?.name || `项目 #${id}` : '公共素材' }
+
+async function loadData() {
+  loading.value = true
+  try {
+    const [fileResult, projectResult, promptResult, modelResult] = await Promise.all([
+      http.get<PageResult<AiFile>>('/files', { params: { keyword: filters.keyword || undefined, file_type: props.fileType, source_type: filters.sourceType || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize } }),
+      http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } }),
+      http.get<PageResult<Prompt>>('/prompts', { params: { status: 'ENABLED', page_size: 100 } }),
+      http.get<PageResult<ModelConfig>>('/model-configs', { params: { model_type: 'IMAGE', status: 'ENABLED', page_size: 100 } }),
+    ])
+    files.value = fileResult.data.items
+    total.value = fileResult.data.total
+    projects.value = projectResult.data.items
+    prompts.value = promptResult.data.items
+    imageModels.value = modelResult.data.items
+  } catch (error) { ElMessage.error(errorMessage(error, `${noun.value}加载失败`)) } finally { loading.value = false }
+}
+
+function openGenerate() {
+  const defaultModel = imageModels.value.find((item) => item.is_default) || imageModels.value[0]
+  Object.assign(generateForm, { project_id: filters.projectId, prompt_id: null, name: '', model_config_id: defaultModel?.id || null, size: '1024x1024' })
+  generateVisible.value = true
+}
+
+function promptChanged(promptId: number | null) {
+  const prompt = prompts.value.find((item) => item.id === promptId)
+  if (prompt?.project_id && !generateForm.project_id) generateForm.project_id = prompt.project_id
+  if (prompt && !generateForm.name) generateForm.name = prompt.name
+}
+
+async function submitGeneration() {
+  if (!generateForm.prompt_id || !generateForm.model_config_id || !generateForm.name.trim()) return ElMessage.warning('请选择提示词和图片模型，并填写图片名称')
+  generating.value = true
+  try {
+    await http.post('/images/generate', { ...generateForm, name: generateForm.name.trim() })
+    ElMessage.success('图片生成任务已加入队列')
+    generateVisible.value = false
+  } catch (error) { ElMessage.error(errorMessage(error, '创建图片任务失败')) } finally { generating.value = false }
+}
+
+async function submitUpload() {
+  const raw = uploadFiles.value[0]?.raw
+  if (!raw) return ElMessage.warning(`请选择${noun.value}`)
+  if (!raw.type.startsWith(isImage.value ? 'image/' : 'video/')) return ElMessage.warning(`请选择有效的${noun.value}文件`)
+  uploading.value = true
+  try {
+    const body = new FormData()
+    body.append('upload', raw)
+    if (uploadProjectId.value) body.append('project_id', String(uploadProjectId.value))
+    await http.post('/files/upload', body)
+    ElMessage.success(`${noun.value}上传成功`)
+    uploadVisible.value = false
+    uploadFiles.value = []
+    uploadProjectId.value = null
+    await loadData()
+  } catch (error) { ElMessage.error(errorMessage(error, '上传失败')) } finally { uploading.value = false }
+}
+
+async function rename(item: AiFile) {
+  try {
+    const result = await ElMessageBox.prompt('请输入新的显示名称', '重命名', { inputValue: item.file_name, inputPattern: /\S+/, inputErrorMessage: '名称不能为空' })
+    await http.put(`/files/${item.id}`, { file_name: result.value })
+    ElMessage.success('名称已更新')
+    await loadData()
+  } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
+}
+
+async function remove(item: AiFile) {
+  try {
+    await ElMessageBox.confirm(`确定删除“${item.file_name}”吗？磁盘文件也会被移除。`, `删除${noun.value}`, { type: 'warning' })
+    await http.delete(`/files/${item.id}`)
+    ElMessage.success(`${noun.value}已删除`)
+    await loadData()
+  } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
+}
+
+function preview(item: AiFile) { previewFile.value = item; previewVisible.value = true }
+async function download(item: AiFile) {
+  try {
+    const { data } = await http.get(`/files/${item.id}/download`, { responseType: 'blob' })
+    const link = document.createElement('a'); link.href = URL.createObjectURL(data); link.download = item.file_name; link.click(); URL.revokeObjectURL(link.href)
+  } catch (error) { ElMessage.error(errorMessage(error, '下载失败')) }
+}
+async function copyUrl(item: AiFile) { await navigator.clipboard.writeText(`${window.location.origin}${item.url}`); ElMessage.success('地址已复制') }
+function search() { filters.page = 1; loadData() }
+watch(() => props.fileType, () => { filters.page = 1; loadData() })
+onActivated(loadData)
+</script>
+
+<template>
+  <div class="page">
+    <div class="page-header"><div><h1>{{ title }}</h1><p>管理上传、AI 生成与工作流产出的{{ noun }}资产</p></div><div class="page-actions"><el-button :type="isImage ? 'default' : 'primary'" :icon="Plus" @click="uploadVisible = true">上传{{ noun }}</el-button><el-button v-if="isImage" type="primary" :icon="MagicStick" @click="openGenerate">AI 生成图片</el-button></div></div>
+    <div class="filter-bar"><el-input v-model="filters.keyword" clearable :placeholder="`搜索${noun}名称`" style="width: 240px" :prefix-icon="Search" @keyup.enter="search" /><el-select v-model="filters.projectId" clearable placeholder="全部项目" style="width: 180px" @change="search"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select><el-select v-model="filters.sourceType" clearable placeholder="全部来源" style="width: 150px" @change="search"><el-option label="手动上传" value="UPLOAD" /><el-option v-if="isImage" label="AI 生成" value="AI_IMAGE" /><el-option v-else label="AI 生成" value="AI_VIDEO" /><el-option v-if="!isImage" label="视频合成" value="VIDEO_MERGE" /></el-select><el-button @click="search">查询</el-button></div>
+    <section class="content-panel table-panel">
+      <el-table v-loading="loading" :data="files" :empty-text="`暂无${noun}`">
+        <el-table-column label="预览" width="76"><template #default="{ row }"><el-image v-if="isImage" :src="row.url" fit="cover" class="asset-thumb" :preview-src-list="[row.url]" preview-teleported /><button v-else class="video-thumb" type="button" title="播放视频" @click="preview(row)"><el-icon><View /></el-icon></button></template></el-table-column>
+        <el-table-column prop="file_name" :label="`${noun}名称`" min-width="220" show-overflow-tooltip />
+        <el-table-column label="归属项目" min-width="150"><template #default="{ row }">{{ projectName(row.project_id) }}</template></el-table-column>
+        <el-table-column label="规格" width="140"><template #default="{ row }"><span v-if="isImage && row.width">{{ row.width }} × {{ row.height }}</span><span v-else-if="!isImage && row.duration">{{ row.duration.toFixed(1) }} 秒</span><span v-else class="muted">未读取</span></template></el-table-column>
+        <el-table-column label="大小" width="110"><template #default="{ row }">{{ formatSize(row.file_size) }}</template></el-table-column>
+        <el-table-column label="来源" width="110"><template #default="{ row }">{{ sourceLabels[row.source_type as AiFile['source_type']] }}</template></el-table-column>
+        <el-table-column label="创建时间" width="180"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
+        <el-table-column label="操作" width="250" fixed="right"><template #default="{ row }"><el-button text type="primary" :icon="View" @click="preview(row)">预览</el-button><el-button text :icon="Edit" @click="rename(row)">重命名</el-button><el-dropdown><el-button text>更多</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item :icon="Download" @click="download(row)">下载</el-dropdown-item><el-dropdown-item :icon="CopyDocument" @click="copyUrl(row)">复制地址</el-dropdown-item><el-dropdown-item :icon="Delete" class="danger-text" @click="remove(row)">删除</el-dropdown-item></el-dropdown-menu></template></el-dropdown></template></el-table-column>
+      </el-table>
+      <div class="pagination-row"><el-pagination v-model:current-page="filters.page" v-model:page-size="filters.pageSize" :total="total" :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next" @change="loadData" /></div>
+    </section>
+    <el-dialog v-model="uploadVisible" :title="`上传${noun}`" width="min(520px, calc(100vw - 32px))">
+      <el-form label-position="top"><el-form-item label="归属项目"><el-select v-model="uploadProjectId" clearable placeholder="公共素材" style="width: 100%"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item :label="noun" required><el-upload v-model:file-list="uploadFiles" drag :auto-upload="false" :limit="1" :accept="isImage ? 'image/*' : 'video/*'" style="width: 100%"><el-icon class="upload-icon"><Plus /></el-icon><div>点击或拖拽文件到这里</div></el-upload></el-form-item></el-form>
+      <template #footer><el-button @click="uploadVisible = false">取消</el-button><el-button type="primary" :loading="uploading" @click="submitUpload">上传</el-button></template>
+    </el-dialog>
+    <el-dialog v-if="isImage" v-model="generateVisible" title="AI 生成图片" width="min(620px, calc(100vw - 32px))">
+      <el-form label-position="top">
+        <el-form-item label="提示词" required><el-select v-model="generateForm.prompt_id" filterable placeholder="从提示词管理中选择" style="width: 100%" @change="promptChanged"><el-option v-for="item in prompts" :key="item.id" :label="`${item.name} · ${item.content.slice(0, 40)}`" :value="item.id" /></el-select></el-form-item>
+        <div class="generate-grid"><el-form-item label="图片名称" required><el-input v-model="generateForm.name" maxlength="200" /></el-form-item><el-form-item label="归属项目"><el-select v-model="generateForm.project_id" clearable placeholder="跟随提示词" style="width: 100%"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></div>
+        <div class="generate-grid"><el-form-item label="图片模型" required><el-select v-model="generateForm.model_config_id" placeholder="请选择图片模型" style="width: 100%"><el-option v-for="item in imageModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item label="图片尺寸"><el-select v-model="generateForm.size" style="width: 100%"><el-option label="1024 × 1024" value="1024x1024" /><el-option label="1536 × 1024" value="1536x1024" /><el-option label="1024 × 1536" value="1024x1536" /></el-select></el-form-item></div>
+      </el-form>
+      <template #footer><el-button @click="generateVisible = false">取消</el-button><el-button type="primary" :icon="MagicStick" :loading="generating" @click="submitGeneration">加入生成队列</el-button></template>
+    </el-dialog>
+    <el-dialog v-model="previewVisible" :title="previewFile?.file_name" width="min(900px, calc(100vw - 32px))" destroy-on-close><div class="preview-stage"><img v-if="isImage && previewFile" :src="previewFile.url" :alt="previewFile.file_name" /><video v-else-if="previewFile" :src="previewFile.url" controls autoplay /></div></el-dialog>
+  </div>
+</template>
+
+<style scoped>.asset-thumb, .video-thumb { width: 42px; height: 42px; border-radius: 4px; } .video-thumb { display: grid; place-items: center; color: #fff; background: #3a423d; border: 0; cursor: pointer; } .upload-icon { margin-bottom: 8px; font-size: 24px; } .generate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } .preview-stage { display: grid; min-height: 260px; max-height: 70vh; place-items: center; overflow: hidden; background: #171a18; border-radius: 6px; } .preview-stage img, .preview-stage video { display: block; max-width: 100%; max-height: 70vh; object-fit: contain; } @media (max-width: 620px) { .generate-grid { grid-template-columns: 1fr; gap: 0; } }</style>
