@@ -180,13 +180,25 @@ async def run_video_generation(task_id: int) -> None:
             prompt = storyboard.video_prompt or storyboard.description
             if not prompt:
                 raise RuntimeError("该分镜没有视频提示词或画面描述")
-            reference_file = None
-            reference_file_id = task.request_payload.get("reference_file_id")
-            if reference_file_id:
+            reference_file_ids = task.request_payload.get("reference_file_ids") or []
+            if not reference_file_ids and task.request_payload.get("reference_file_id"):
+                reference_file_ids = [task.request_payload["reference_file_id"]]
+            reference_files: list[AiFile] = []
+            for reference_file_id in reference_file_ids:
                 reference_file = db.get(AiFile, reference_file_id)
                 if reference_file is None or reference_file.file_type != "IMAGE":
                     raise RuntimeError("参考文件不是有效图片")
-            image_data_url = _reference_data_url(reference_file)
+                reference_files.append(reference_file)
+            image_data_urls = [
+                data_url
+                for reference_file in reference_files
+                if (data_url := _reference_data_url(reference_file)) is not None
+            ]
+            request_options = {
+                key: task.request_payload[key]
+                for key in ("resolution", "seed")
+                if task.request_payload.get(key) is not None
+            }
             task.status = "RUNNING"
             task.progress = 10
             task.started_at = datetime.now()
@@ -223,8 +235,9 @@ async def run_video_generation(task_id: int) -> None:
             data, mime_type = await generate_video(
                 config,
                 prompt,
-                duration=storyboard.duration or 10,
-                image_data_url=image_data_url,
+                duration=task.request_payload.get("duration") or storyboard.duration or 10,
+                image_data_urls=image_data_urls,
+                request_options=request_options,
                 cancelled=cancelled,
                 on_submitted=submitted,
                 on_poll=polled,

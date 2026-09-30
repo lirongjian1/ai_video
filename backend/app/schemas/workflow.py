@@ -313,3 +313,9 @@ class ImageGenerateRequest(BaseModel):
 class VideoGenerateRequest(BaseModel):
     model_config_id: int
     reference_file_id: int | None = None
+    reference_file_ids: list[int] = Field(default_factory=list, max_length=9)
+    duration: int | None = Field(default=None, ge=1, le=15)
+    resolution: str | None = Field(
+        default=None, pattern=r"^(480p竖|768p竖|480p横|768p横)$"
+    )
+    seed: int | None = None

@@ -403,6 +403,8 @@ async def generate_video(
     *,
     duration: float = 10,
     image_data_url: str | None = None,
+    image_data_urls: list[str] | None = None,
+    request_options: dict[str, Any] | None = None,
     cancelled: Callable[[], bool] | None = None,
     on_submitted: Callable[[str], None] | None = None,
     on_poll: Callable[[str, int], None] | None = None,
@@ -416,15 +418,29 @@ async def generate_video(
         int(duration) if float(duration).is_integer() else duration
     )
     video_options = _options(config, "video_options")
+    video_options.update(request_options or {})
+    reference_images = [item for item in (image_data_urls or []) if item]
+    if image_data_url and image_data_url not in reference_images:
+        reference_images.insert(0, image_data_url)
     if is_comfyui:
         payload: dict[str, Any] = {
             "prompt": prompt,
             "duration": normalized_duration,
         }
         payload.update(video_options)
+        configured_fields = config.extra_config.get("reference_fields")
         reference_field = config.extra_config.get("reference_field")
-        if image_data_url and reference_field:
-            payload[str(reference_field)] = image_data_url
+        field_template = str(
+            config.extra_config.get("reference_field_template", "ref_image_{index}")
+        )
+        for index, reference_image in enumerate(reference_images):
+            if isinstance(configured_fields, list) and index < len(configured_fields):
+                field_name = str(configured_fields[index])
+            elif index == 0 and reference_field:
+                field_name = str(reference_field)
+            else:
+                field_name = field_template.format(index=index)
+            payload[field_name] = reference_image
     elif is_ark:
         flag_names = {
             "resolution": "rs",
@@ -444,9 +460,9 @@ async def generate_video(
         content: list[dict[str, Any]] = [
             {"type": "text", "text": f"{prompt} {' '.join(flags)}"}
         ]
-        if image_data_url:
+        if reference_images:
             content.append(
-                {"type": "image_url", "image_url": {"url": image_data_url}}
+                {"type": "image_url", "image_url": {"url": reference_images[0]}}
             )
         payload = {
             "model": config.model_name,
@@ -458,11 +474,11 @@ async def generate_video(
             "prompt": prompt,
             "duration": normalized_duration,
         }
-    if image_data_url and not is_ark and not is_comfyui:
+    if reference_images and not is_ark and not is_comfyui:
         default_reference_field = "first_frame_image" if is_minimax else "image"
         payload[
             str(config.extra_config.get("reference_field", default_reference_field))
-        ] = image_data_url
+        ] = reference_images[0]
     if is_minimax and normalized_duration == 10:
         payload["resolution"] = "768P"
     if not is_comfyui:

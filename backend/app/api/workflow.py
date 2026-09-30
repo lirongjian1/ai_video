@@ -750,10 +750,16 @@ def create_video_generation(
     _require_model_config(db, payload.model_config_id, "VIDEO")
     if not (storyboard.video_prompt or storyboard.description):
         raise HTTPException(status_code=400, detail="请先填写分镜的视频提示词或画面描述")
-    if payload.reference_file_id is not None:
-        reference = _require(db, AiFile, payload.reference_file_id, "参考图片")
+    reference_file_ids = list(dict.fromkeys(payload.reference_file_ids))
+    if payload.reference_file_id is not None and payload.reference_file_id not in reference_file_ids:
+        reference_file_ids.insert(0, payload.reference_file_id)
+    if len(reference_file_ids) > 9:
+        raise HTTPException(status_code=400, detail="参考图片最多选择 9 张")
+    for reference_file_id in reference_file_ids:
+        reference = _require(db, AiFile, reference_file_id, "参考图片")
         if reference.file_type != "IMAGE":
             raise HTTPException(status_code=400, detail="参考文件必须是图片")
+    storyboard.reference_file_ids = reference_file_ids
     task = AiTask(
         project_id=storyboard.project_id,
         name=f"生成视频：{storyboard.title}",
@@ -762,7 +768,12 @@ def create_video_generation(
         target_id=storyboard.id,
         model_config_id=payload.model_config_id,
         status="PENDING",
-        request_payload={"reference_file_id": payload.reference_file_id},
+        request_payload={
+            "reference_file_ids": reference_file_ids,
+            "duration": payload.duration,
+            "resolution": payload.resolution,
+            "seed": payload.seed,
+        },
         created_by=current_user.id,
     )
     db.add(task)
