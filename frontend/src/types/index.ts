@@ -84,7 +84,7 @@ export interface Prompt {
   id: number
   project_id: number | null
   name: string
-  prompt_type: 'CHARACTER' | 'SCENE' | 'SCRIPT' | 'STORYBOARD' | 'VIDEO' | 'CUSTOM'
+  prompt_type: 'CHARACTER' | 'SCENE' | 'STORY_CONTENT' | 'SCRIPT' | 'STORYBOARD' | 'VIDEO' | 'CUSTOM'
   content: string
   negative_prompt: string | null
   variables: Record<string, unknown>
@@ -127,6 +127,8 @@ export interface Scene {
 export interface Script {
   id: number
   project_id: number
+  /** 本剧本依据的「内容故事」提示词；老剧本可能为空（不支持重新生成） */
+  story_prompt_id: number | null
   title: string
   summary: string | null
   content: string
@@ -138,6 +140,7 @@ export interface Script {
   updated_at: string
 }
 
+/** 分镜段（storyboards）—— 每段固定 10 秒，内含 1~2 个镜头 */
 export interface Storyboard {
   id: number
   script_id: number
@@ -145,6 +148,10 @@ export interface Storyboard {
   sequence: number
   title: string
   description: string | null
+  /** 本段剧情 */
+  plot: string | null
+  /** 本段主体动作 */
+  subject_action: string | null
   duration: number | null
   camera: string | null
   dialogue: string | null
@@ -156,6 +163,28 @@ export interface Storyboard {
   created_by: string
   created_at: string
   updated_at: string
+}
+
+/** 镜头（storyboard_shots）—— 段内时长均分 */
+export interface StoryboardShot {
+  id: number
+  storyboard_id: number
+  project_id: number | null
+  sequence: number
+  description: string | null
+  duration: number | null
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+/** 分镜抽屉里的树形行：段与镜头统一成同一形状，用 __isShot 区分 */
+export interface StoryboardTreeRow extends Storyboard {
+  __key: string
+  __isShot: boolean
+  /** 镜头行专用：所属分镜段 id */
+  __parentId?: number
+  children?: StoryboardTreeRow[]
 }
 
 export interface AiTask {

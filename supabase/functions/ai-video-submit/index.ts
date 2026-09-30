@@ -7,6 +7,7 @@ import { adminClient, fail, handler, json, readJson, requireUser } from '../_sha
 import { generateText, MIME_EXTENSIONS, submitVideo, type ModelConfig } from '../_shared/gateway.ts'
 import {
   REFERENCE_INSTRUCTION,
+  VIDEO_PROMPT_PREFIX,
   VIDEO_TRANSLATE_PROMPT,
   hasCjk,
   pickTranslationConfig,
@@ -83,7 +84,10 @@ Deno.serve(
       prompt = (await generateText(translationConfig, VIDEO_TRANSLATE_PROMPT, prompt, 0.2, db)).trim()
       translated = true
     }
-    if (imageDataUrls.length > 0 && !prompt.includes('严格参考所提供的')) {
+    // V2.0 生成的视频提示词已自带「固定前缀 + 固定结尾」，此处不再重复注入
+    const hasReferenceInstruction =
+      prompt.includes(VIDEO_PROMPT_PREFIX) || prompt.includes('严格参考所提供的')
+    if (imageDataUrls.length > 0 && !hasReferenceInstruction) {
       prompt = `${REFERENCE_INSTRUCTION}\n${prompt}`
     }
 

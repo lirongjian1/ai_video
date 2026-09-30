@@ -2,27 +2,44 @@
  * ai-text —— 文本生成统一入口
  * 支持 action:
  *   connection-test  连接测试
- *   generate-prompt  生成角色三视图 / 场景提示词（含写库、任务记录）
- *   generate-script  生成六段分镜（含写库、任务记录）
+ *   generate-prompt  生成 角色三视图 / 场景概念图 / 内容故事（含写库、任务记录）
+ *   generate-script  基于「内容故事」二次生成六段分镜（含写库、任务记录）
+ *
+ * V2.0：剧本改为「内容故事 → 二次生成」，落库为 段(storyboards) → 镜头(storyboard_shots) 两级结构。
  */
 import { adminClient, fail, handler, json, readJson, requireUser } from '../_shared/supabase.ts'
 import { generateText, testModelConnection, type ModelConfig } from '../_shared/gateway.ts'
 import {
   CHARACTER_THREE_VIEW_PROMPT,
   SCENE_PROMPT,
-  SCRIPT_SYSTEM_PROMPT,
-  parseStoryboardJson,
+  SCRIPT_FROM_STORY_SYSTEM_PROMPT,
+  STORY_CONTENT_SYSTEM_PROMPT,
+  buildVideoPrompt,
+  normalizeAspectRatio,
+  parseScriptFromStoryJson,
+  parseStoryContentJson,
+  withStructuredRetry,
+  type AspectRatio,
 } from '../_shared/prompts.ts'
+
+/** 每个分镜段的固定时长（秒）。 */
+const SEGMENT_DURATION = 10
+/** 结构化输出最多尝试次数（V2.0 规定 3 次）。 */
+const MAX_STRUCTURED_ATTEMPTS = 3
 
 interface Payload {
   action?: string
   model_config_id?: number
   project_id?: number | null
   name?: string
+  /** 生成提示词时的关键内容 */
   keywords?: string
   generation_type?: string
+  /** 内容故事的画幅 */
+  aspect_ratio?: string
+  /** 二次生成剧本所依据的「内容故事」提示词 */
+  story_prompt_id?: number
   title?: string
-  style?: string
 }
 
 async function loadConfig(
@@ -36,6 +53,12 @@ async function loadConfig(
   if (data.created_by !== ownerId) throw new Error('模型配置不存在')
   if (data.status !== 'ENABLED') throw new Error('所选模型配置已停用')
   return data as ModelConfig
+}
+
+/** 把上一次的校验失败原因回喂给模型，要求它修正后重新输出完整 JSON。 */
+function correctivePrompt(base: string, corrective: string | null): string {
+  if (!corrective) return base
+  return `${base}\n\n上一次输出不符合要求：${corrective}\n请修正后重新输出完整 JSON。`
 }
 
 Deno.serve(
@@ -60,10 +83,19 @@ Deno.serve(
       const config = await loadConfig(db, payload.model_config_id, user.id)
       if (config.model_type !== 'TEXT') return fail('请选择文本模型')
 
-      const isCharacter = payload.generation_type === 'CHARACTER_THREE_VIEW'
-      const systemPrompt = isCharacter ? CHARACTER_THREE_VIEW_PROMPT : SCENE_PROMPT
-      const promptType = isCharacter ? 'CHARACTER' : 'SCENE'
+      const generationType = payload.generation_type ?? 'CHARACTER_THREE_VIEW'
+      const isStoryContent = generationType === 'STORY_CONTENT'
+      const isCharacter = generationType === 'CHARACTER_THREE_VIEW'
+      const systemPrompt = isStoryContent
+        ? STORY_CONTENT_SYSTEM_PROMPT
+        : isCharacter
+          ? CHARACTER_THREE_VIEW_PROMPT
+          : SCENE_PROMPT
+      const promptType = isStoryContent ? 'STORY_CONTENT' : isCharacter ? 'CHARACTER' : 'SCENE'
       const keywords = payload.keywords ?? ''
+      const aspectRatio: AspectRatio = normalizeAspectRatio(payload.aspect_ratio, '16:9')
+      // 内容故事需要把画幅明确告诉模型
+      const userPrompt = isStoryContent ? `${keywords}\n\n画幅：${aspectRatio}` : keywords
 
       const { data: task } = await db
         .from('tasks')
@@ -74,7 +106,11 @@ Deno.serve(
           model_config_id: config.id,
           status: 'RUNNING',
           progress: 20,
-          request_payload: { generation_type: payload.generation_type, keywords },
+          request_payload: {
+            generation_type: generationType,
+            keywords,
+            aspect_ratio: isStoryContent ? aspectRatio : undefined,
+          },
           started_at: new Date().toISOString(),
           created_by: user.id,
         })
@@ -82,7 +118,34 @@ Deno.serve(
         .single()
 
       try {
-        const content = await generateText(config, systemPrompt, keywords, 0.7, db)
+        let content: string
+        let variables: Record<string, unknown>
+
+        if (isStoryContent) {
+          const story = await withStructuredRetry(
+            (raw) => parseStoryContentJson(raw, { aspectRatio }),
+            (corrective) =>
+              generateText(config, systemPrompt, correctivePrompt(userPrompt, corrective), 0.7, db),
+            MAX_STRUCTURED_ATTEMPTS,
+          )
+          // content 存放「内容故事」JSON，作为剧本二次生成的唯一剧情依据
+          content = JSON.stringify(story)
+          variables = {
+            keywords,
+            generation_type: generationType,
+            model_config_id: config.id,
+            aspect_ratio: story.aspect_ratio,
+            outline: story.outline,
+            subject: story.subject,
+            scene: story.scene,
+            full_story: story.full_story,
+            segment_count: story.segments.length,
+          }
+        } else {
+          content = await generateText(config, systemPrompt, userPrompt, 0.7, db)
+          variables = { keywords, generation_type: generationType, model_config_id: config.id }
+        }
+
         const { data: record, error } = await db
           .from('prompts')
           .insert({
@@ -90,7 +153,7 @@ Deno.serve(
             name: payload.name ?? '',
             prompt_type: promptType,
             content,
-            variables: { keywords, generation_type: payload.generation_type, model_config_id: config.id },
+            variables,
             status: 'ENABLED',
             created_by: user.id,
           })
@@ -128,14 +191,28 @@ Deno.serve(
       }
     }
 
-    // ---- 生成六段分镜 ----
+    // ---- 基于「内容故事」二次生成六段分镜 ----
     if (payload.action === 'generate-script') {
       const config = await loadConfig(db, payload.model_config_id, user.id)
       if (config.model_type !== 'TEXT') return fail('请选择文本模型')
       if (!payload.project_id) return fail('缺少 project_id')
+      if (!payload.story_prompt_id) return fail('请选择内容故事')
 
-      const keywords = payload.keywords ?? ''
-      const userPrompt = payload.style ? `${keywords}\n视觉风格：${payload.style}` : keywords
+      // 内容故事是唯一剧情依据，必须存在、属于本人、类型正确且未停用
+      const { data: storyPrompt, error: storyError } = await db
+        .from('prompts')
+        .select('*')
+        .eq('id', payload.story_prompt_id)
+        .single()
+      if (storyError || !storyPrompt) return fail('内容故事不存在', 404)
+      if (storyPrompt.created_by !== user.id) return fail('内容故事不存在', 404)
+      if (storyPrompt.prompt_type !== 'STORY_CONTENT') return fail('所选提示词不是「内容故事」类型')
+      if (storyPrompt.status !== 'ENABLED') return fail('所选内容故事已停用')
+
+      const storyContent = String(storyPrompt.content ?? '').trim()
+      if (!storyContent) return fail('所选内容故事内容为空')
+
+      const userPrompt = `内容故事（JSON）：\n${storyContent}`
 
       const { data: task } = await db
         .from('tasks')
@@ -146,7 +223,7 @@ Deno.serve(
           model_config_id: config.id,
           status: 'RUNNING',
           progress: 15,
-          request_payload: { keywords, style: payload.style ?? null },
+          request_payload: { story_prompt_id: payload.story_prompt_id },
           started_at: new Date().toISOString(),
           created_by: user.id,
         })
@@ -154,17 +231,28 @@ Deno.serve(
         .single()
 
       try {
-        const generated = parseStoryboardJson(
-          await generateText(config, SCRIPT_SYSTEM_PROMPT, userPrompt, 0.6, db),
+        const generated = await withStructuredRetry(
+          parseScriptFromStoryJson,
+          (corrective) =>
+            generateText(
+              config,
+              SCRIPT_FROM_STORY_SYSTEM_PROMPT,
+              correctivePrompt(userPrompt, corrective),
+              0.6,
+              db,
+            ),
+          MAX_STRUCTURED_ATTEMPTS,
         )
+
         const { data: script, error } = await db
           .from('scripts')
           .insert({
             project_id: payload.project_id,
+            story_prompt_id: storyPrompt.id,
             title: payload.title ?? '',
-            summary: String(generated.summary ?? keywords).slice(0, 5000),
-            content: String(generated.content ?? keywords),
-            duration: 60,
+            summary: String(generated.summary ?? storyPrompt.name ?? '').slice(0, 5000),
+            content: generated.content,
+            duration: SEGMENT_DURATION * generated.segments.length,
             status: 'READY',
             created_by: user.id,
           })
@@ -172,19 +260,23 @@ Deno.serve(
           .single()
         if (error) throw new Error(error.message)
 
-        const boards = generated.shots.map((shot, index) => {
+        // 段：固定 6 条，每条 10 秒
+        const boardRows = generated.segments.map((segment, index) => {
           const i = index + 1
-          if (!shot || typeof shot !== 'object') throw new Error(`第 ${i} 个分镜格式不正确`)
+          const title = segment.plot || segment.description || `分镜段 ${i}`
           return {
             script_id: script.id,
             project_id: payload.project_id,
             sequence: i,
-            title: String(shot.title ?? `分镜 ${i}`).slice(0, 200),
-            description: String(shot.description ?? ''),
-            duration: 10,
-            camera: String(shot.camera ?? '').slice(0, 200) || null,
-            dialogue: String(shot.dialogue ?? '') || null,
-            video_prompt: String(shot.video_prompt ?? shot.description ?? ''),
+            title: title.slice(0, 200),
+            description: segment.description,
+            plot: segment.plot || null,
+            subject_action: segment.subject_action || null,
+            duration: SEGMENT_DURATION,
+            camera: segment.camera.slice(0, 200) || null,
+            dialogue: segment.dialogue || null,
+            // 固定前缀 + 固定结尾，且保证 ≤150 字符
+            video_prompt: buildVideoPrompt(segment.video_prompt),
             character_ids: [],
             reference_file_ids: [],
             status: 'READY',
@@ -193,9 +285,31 @@ Deno.serve(
         })
         const { data: insertedBoards, error: boardError } = await db
           .from('storyboards')
-          .insert(boards)
-          .select('id')
+          .insert(boardRows)
+          .select('id, sequence')
         if (boardError) throw new Error(boardError.message)
+
+        // 镜头：每段 1~2 条，段内时长均分
+        const boardIdBySequence = new Map<number, number>(
+          (insertedBoards ?? []).map((row) => [Number(row.sequence), Number(row.id)]),
+        )
+        const shotRows = generated.segments.flatMap((segment) => {
+          const storyboardId = boardIdBySequence.get(segment.sequence)
+          if (!storyboardId) return []
+          const shotDuration = Number((SEGMENT_DURATION / segment.shots.length).toFixed(2))
+          return segment.shots.map((shot, index) => ({
+            storyboard_id: storyboardId,
+            project_id: payload.project_id,
+            sequence: index + 1,
+            description: shot.description,
+            duration: shotDuration,
+            created_by: user.id,
+          }))
+        })
+        if (shotRows.length) {
+          const { error: shotError } = await db.from('storyboard_shots').insert(shotRows)
+          if (shotError) throw new Error(shotError.message)
+        }
 
         if (task) {
           await db
@@ -208,12 +322,16 @@ Deno.serve(
               result_payload: {
                 script_id: script.id,
                 storyboard_ids: (insertedBoards ?? []).map((b) => b.id),
+                shot_count: shotRows.length,
               },
               finished_at: new Date().toISOString(),
             })
             .eq('id', task.id)
         }
-        return json({ ...script, storyboard_count: 6 }, 201)
+        return json(
+          { ...script, storyboard_count: boardRows.length, shot_count: shotRows.length },
+          201,
+        )
       } catch (error) {
         if (task) {
           await db

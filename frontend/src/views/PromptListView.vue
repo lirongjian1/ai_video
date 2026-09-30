@@ -1,17 +1,36 @@
 <script setup lang="ts">
 import { Delete, DocumentCopy, Edit, MagicStick, Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { onActivated, reactive, ref } from 'vue'
+import { computed, onActivated, reactive, ref } from 'vue'
 
 import { errorMessage, modelConfigsApi, projectsApi, promptsApi } from '@/api'
 import type { ModelConfig, Project, Prompt } from '@/types'
 
 const promptTypes = [
   { label: '角色', value: 'CHARACTER' }, { label: '场景', value: 'SCENE' },
+  { label: '内容故事', value: 'STORY_CONTENT' },
   { label: '剧本', value: 'SCRIPT' }, { label: '分镜', value: 'STORYBOARD' },
   { label: '视频', value: 'VIDEO' }, { label: '自定义', value: 'CUSTOM' },
 ]
 const typeLabel = Object.fromEntries(promptTypes.map((item) => [item.value, item.label]))
+/** 内容故事的画幅，存在 variables.aspect_ratio 里 */
+const aspectRatioOptions = [
+  { label: '16:9 横屏', value: '16:9' },
+  { label: '9:16 竖屏', value: '9:16' },
+]
+function aspectRatioOf(row: Prompt) {
+  return row.variables?.aspect_ratio === '9:16' ? '9:16' : '16:9'
+}
+function typeText(row: Prompt) {
+  const label = typeLabel[row.prompt_type] ?? row.prompt_type
+  return row.prompt_type === 'STORY_CONTENT' ? `${label} · ${aspectRatioOf(row)}` : label
+}
+/** 内容故事的 content 是 JSON，列表里展示更好读的故事正文 */
+function contentPreview(row: Prompt) {
+  if (row.prompt_type !== 'STORY_CONTENT') return row.content
+  const fullStory = row.variables?.full_story
+  return typeof fullStory === 'string' && fullStory.trim() ? fullStory : row.content
+}
 const loading = ref(false)
 const saving = ref(false)
 const generating = ref(false)
@@ -28,7 +47,14 @@ const form = reactive({
   name: '', prompt_type: 'CUSTOM' as Prompt['prompt_type'], content: '', negative_prompt: '',
   variablesText: '{}', status: 'ENABLED' as Prompt['status'],
 })
-const generateForm = reactive({ project_id: null as number | null, name: '', generation_type: 'CHARACTER_THREE_VIEW', keywords: '', model_config_id: null as number | null })
+const generateForm = reactive({ project_id: null as number | null, name: '', generation_type: 'CHARACTER_THREE_VIEW', keywords: '', model_config_id: null as number | null, aspect_ratio: '16:9' as '16:9' | '9:16' })
+/** 生成类型 → 提示词类型标签 */
+const generationLabels: Record<string, string> = {
+  CHARACTER_THREE_VIEW: '主体定妆三视图',
+  SCENE: '场景概念图',
+  STORY_CONTENT: '内容故事',
+}
+const isStoryContentGeneration = computed(() => generateForm.generation_type === 'STORY_CONTENT')
 
 function projectName(id: number | null) {
   return id ? projects.value.find((item) => item.id === id)?.name || `项目 #${id}` : '公共模板'
@@ -53,7 +79,7 @@ async function loadData() {
 
 function openGenerate() {
   const defaultModel = textModels.value.find((item) => item.is_default) || textModels.value[0]
-  Object.assign(generateForm, { project_id: filters.projectId, name: '', generation_type: 'CHARACTER_THREE_VIEW', keywords: '', model_config_id: defaultModel?.id || null })
+  Object.assign(generateForm, { project_id: filters.projectId, name: '', generation_type: 'CHARACTER_THREE_VIEW', keywords: '', model_config_id: defaultModel?.id || null, aspect_ratio: '16:9' })
   generateVisible.value = true
 }
 
@@ -62,8 +88,15 @@ async function generatePrompt() {
   if (!generateForm.name.trim() || !generateForm.keywords.trim() || !modelConfigId) return ElMessage.warning('请填写名称、关键内容并选择文本模型')
   generating.value = true
   try {
-    await promptsApi.generate({ project_id: generateForm.project_id, model_config_id: modelConfigId, name: generateForm.name.trim(), keywords: generateForm.keywords.trim(), generation_type: generateForm.generation_type })
-    ElMessage.success('提示词生成完成')
+    await promptsApi.generate({
+      project_id: generateForm.project_id,
+      model_config_id: modelConfigId,
+      name: generateForm.name.trim(),
+      keywords: generateForm.keywords.trim(),
+      generation_type: generateForm.generation_type,
+      aspect_ratio: isStoryContentGeneration.value ? generateForm.aspect_ratio : undefined,
+    })
+    ElMessage.success(isStoryContentGeneration.value ? '内容故事生成完成（6 段，每段 1~2 个镜头）' : '提示词生成完成')
     generateVisible.value = false
     await loadData()
   } catch (error) { ElMessage.error(errorMessage(error, '提示词生成失败')) } finally { generating.value = false }
@@ -155,9 +188,9 @@ onActivated(loadData)
     <section class="content-panel table-panel">
       <el-table v-loading="loading" :data="prompts" empty-text="暂无提示词">
         <el-table-column prop="name" label="名称" min-width="180" />
-        <el-table-column label="类型" width="100"><template #default="{ row }"><el-tag effect="plain">{{ typeLabel[row.prompt_type] }}</el-tag></template></el-table-column>
+        <el-table-column label="类型" width="130"><template #default="{ row }"><el-tag effect="plain">{{ typeText(row) }}</el-tag></template></el-table-column>
         <el-table-column label="归属项目" min-width="150"><template #default="{ row }">{{ projectName(row.project_id) }}</template></el-table-column>
-        <el-table-column prop="content" label="提示词内容" min-width="300" show-overflow-tooltip />
+        <el-table-column label="提示词内容" min-width="300" show-overflow-tooltip><template #default="{ row }">{{ contentPreview(row) }}</template></el-table-column>
         <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="row.status === 'ENABLED' ? 'success' : 'info'" effect="plain">{{ row.status === 'ENABLED' ? '启用' : '停用' }}</el-tag></template></el-table-column>
         <el-table-column label="更新时间" width="180"><template #default="{ row }">{{ new Date(row.updated_at).toLocaleString() }}</template></el-table-column>
         <el-table-column label="操作" width="215" fixed="right"><template #default="{ row }"><el-button text type="primary" :icon="DocumentCopy" @click="copyContent(row.content)">复制</el-button><el-button text type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="danger" :icon="Delete" @click="remove(row)">删除</el-button></template></el-table-column>
@@ -176,9 +209,16 @@ onActivated(loadData)
     </el-dialog>
     <el-dialog v-model="generateVisible" title="AI 生成提示词" width="min(640px, calc(100vw - 32px))">
       <el-form label-position="top">
-        <div class="form-grid"><el-form-item label="提示词名称" required><el-input v-model="generateForm.name" maxlength="150" /></el-form-item><el-form-item label="生成类型" required><el-select v-model="generateForm.generation_type" style="width: 100%"><el-option label="主体定妆三视图" value="CHARACTER_THREE_VIEW" /><el-option label="场景概念图" value="SCENE" /></el-select></el-form-item></div>
-        <div class="form-grid"><el-form-item label="归属项目"><el-select v-model="generateForm.project_id" clearable placeholder="公共模板" style="width: 100%"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item><el-form-item label="文本模型" required><el-select v-model="generateForm.model_config_id" placeholder="请选择文本模型" style="width: 100%"><el-option v-for="item in textModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item></div>
-        <el-form-item label="关键内容" required><el-input v-model="generateForm.keywords" type="textarea" :rows="6" maxlength="5000" show-word-limit placeholder="输入主体外形、服装、风格，或场景地点、时间、氛围等关键描述" /></el-form-item>
+        <div class="form-grid"><el-form-item label="提示词名称" required><el-input v-model="generateForm.name" maxlength="150" /></el-form-item><el-form-item label="生成类型" required><el-select v-model="generateForm.generation_type" style="width: 100%"><el-option label="主体定妆三视图" value="CHARACTER_THREE_VIEW" /><el-option label="场景概念图" value="SCENE" /><el-option label="内容故事（二次生成剧本依据）" value="STORY_CONTENT" /></el-select></el-form-item></div>
+        <div class="form-grid">
+          <el-form-item label="归属项目"><el-select v-model="generateForm.project_id" clearable placeholder="公共模板" style="width: 100%"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+          <el-form-item v-if="isStoryContentGeneration" label="画幅" required><el-select v-model="generateForm.aspect_ratio" style="width: 100%"><el-option v-for="item in aspectRatioOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
+          <el-form-item v-else label="文本模型" required><el-select v-model="generateForm.model_config_id" placeholder="请选择文本模型" style="width: 100%"><el-option v-for="item in textModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        </div>
+        <el-form-item v-if="isStoryContentGeneration" label="文本模型" required><el-select v-model="generateForm.model_config_id" placeholder="请选择文本模型" style="width: 100%"><el-option v-for="item in textModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <el-form-item :label="`关键内容（${generationLabels[generateForm.generation_type]}）`" required>
+          <el-input v-model="generateForm.keywords" type="textarea" :rows="6" maxlength="5000" show-word-limit :placeholder="isStoryContentGeneration ? '输入题材、主角、场景、冲突与期望结局；模型会写成 6 段故事，每段 1~2 个镜头，作为后续剧本二次生成的唯一依据' : '输入主体外形、服装、风格，或场景地点、时间、氛围等关键描述'" />
+        </el-form-item>
       </el-form>
       <template #footer><el-button @click="generateVisible = false">取消</el-button><el-button type="primary" :icon="MagicStick" :loading="generating" @click="generatePrompt">生成并保存</el-button></template>
     </el-dialog>

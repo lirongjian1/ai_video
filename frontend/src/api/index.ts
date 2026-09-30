@@ -15,6 +15,7 @@ import type {
   Scene,
   Script,
   Storyboard,
+  StoryboardShot,
   User,
 } from '@/types'
 
@@ -301,6 +302,8 @@ export const promptsApi = {
     name: string
     keywords: string
     generation_type: string
+    /** 仅「内容故事」需要：16:9 / 9:16 */
+    aspect_ratio?: '16:9' | '9:16'
   }) => invokeFunction<Prompt>('ai-text', { ...payload, action: 'generate-prompt' }),
 }
 
@@ -373,12 +376,16 @@ export const scriptsApi = {
     const { error } = await supabase.from('scripts').delete().eq('id', id)
     if (error) throw new Error(error.message)
   },
+  /**
+   * 基于「内容故事」二次生成六段分镜。
+   * V2.0：必须传入 story_prompt_id（STORY_CONTENT 类型的提示词），
+   * 后端据此生成 6 个分镜段 + 每段 1~2 个镜头。
+   */
   generate: (payload: {
     project_id: number
     model_config_id: number
+    story_prompt_id: number
     title: string
-    keywords: string
-    style?: string
   }) => invokeFunction<Script>('ai-script', payload),
 }
 
@@ -411,6 +418,45 @@ export const storyboardsApi = {
   },
   remove: async (id: number) => {
     const { error } = await supabase.from('storyboards').delete().eq('id', id)
+    if (error) throw new Error(error.message)
+  },
+}
+
+/** 镜头：分镜段内的下级结构（每段 1~2 个） */
+export const storyboardShotsApi = {
+  listByStoryboards: async (storyboardIds: number[]): Promise<StoryboardShot[]> => {
+    if (!storyboardIds.length) return []
+    const { data, error } = await supabase
+      .from('storyboard_shots')
+      .select('*')
+      .in('storyboard_id', storyboardIds)
+      .order('sequence', { ascending: true })
+      .order('id', { ascending: true })
+    if (error) throw new Error(error.message)
+    return (data ?? []) as StoryboardShot[]
+  },
+  create: async (payload: Partial<StoryboardShot>) => {
+    const { data: auth } = await supabase.auth.getUser()
+    const { data, error } = await supabase
+      .from('storyboard_shots')
+      .insert({ ...payload, created_by: auth.user!.id })
+      .select()
+      .single()
+    if (error) throw new Error(error.message)
+    return data as StoryboardShot
+  },
+  update: async (id: number, payload: Partial<StoryboardShot>) => {
+    const { data, error } = await supabase
+      .from('storyboard_shots')
+      .update(payload)
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw new Error(error.message)
+    return data as StoryboardShot
+  },
+  remove: async (id: number) => {
+    const { error } = await supabase.from('storyboard_shots').delete().eq('id', id)
     if (error) throw new Error(error.message)
   },
 }
