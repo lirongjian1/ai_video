@@ -202,11 +202,23 @@ function availableModelIds(payload: Record<string, unknown>): Set<string> {
 }
 
 async function parseJson(response: Response): Promise<Record<string, unknown>> {
+  // 注意：Response 的 body 只能消费一次，这里统一读出文本再解析
+  const text = await response.text().catch(() => '')
+  return parseJsonText(response, text)
+}
+
+/**
+ * 基于已读出的文本解析响应。
+ * 与 parseJson 分离，是为了让调用方在需要「先看文本再决定是否解析」时
+ * 不必重复读取 response body（body 只能读一次，response.clone() 在部分
+ * 边缘运行时不可用）。
+ */
+function parseJsonText(response: Response, text: string): Record<string, unknown> {
   if (!response.ok) {
-    const text = (await response.text()).trim().slice(-1500)
-    let detail = text
+    const trimmed = text.trim().slice(-1500)
+    let detail = trimmed
     try {
-      const errorPayload = JSON.parse(text)
+      const errorPayload = JSON.parse(trimmed)
       if (errorPayload && typeof errorPayload === 'object') {
         const message = String(nested(errorPayload, ['error', 'message'], ['message'], ['msg']) ?? '')
         const code = String(nested(errorPayload, ['error', 'code'], ['code']) ?? '')
@@ -225,7 +237,7 @@ async function parseJson(response: Response): Promise<Record<string, unknown>> {
     throw new ModelCallError(`模型接口返回 ${response.status}: ${detail || response.statusText}`)
   }
   try {
-    const payload = await response.json()
+    const payload = JSON.parse(text)
     if (!payload || typeof payload !== 'object') throw new Error()
     return payload as Record<string, unknown>
   } catch {
@@ -292,14 +304,16 @@ export async function testModelConnection(
     const payload: Record<string, unknown> = { model: config.model_name }
     if (isArkVideo(config)) payload.content = [{ type: 'text', text: '' }]
     const response = await fetch(url, { method: 'POST', headers: hdrs, body: JSON.stringify(payload) })
-    const detail = (await response.clone().text()).toLowerCase()
+    // 响应体只能读一次：先取出文本，后续判断与报错都复用它
+    const rawText = await response.text().catch(() => '')
+    const detail = rawText.toLowerCase()
     const markers = ['empty', 'required', 'missing', 'invalid', '不能为空', '必填']
     const inputError =
       ['prompt', 'content', 'text'].some((f) => detail.includes(f)) && markers.some((m) => detail.includes(m))
     if ([400, 406, 422].includes(response.status) && inputError) {
       return '连接成功，视频接口、认证和模型名称有效'
     }
-    await parseJson(response)
+    parseJsonText(response, rawText)
     throw new ModelCallError('视频接口未返回预期的参数校验结果')
   }
 
