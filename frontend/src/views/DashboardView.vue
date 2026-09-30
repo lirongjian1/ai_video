@@ -4,10 +4,10 @@ import { storeToRefs } from 'pinia'
 import { onActivated, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { http } from '@/api/http'
+import { filesApi, projectsApi, usersApi } from '@/api'
 import TaskProgressList from '@/components/TaskProgressList.vue'
 import { useTaskStore } from '@/stores/tasks'
-import type { AiFile, PageResult, Project, User as UserType } from '@/types'
+import type { Project } from '@/types'
 
 const router = useRouter()
 const taskStore = useTaskStore()
@@ -21,17 +21,17 @@ async function loadData() {
   loading.value = true
   try {
     const [projects, files, users] = await Promise.all([
-      http.get<PageResult<Project>>('/projects', { params: { page_size: 5 } }),
-      http.get<PageResult<AiFile>>('/files', { params: { page_size: 1 } }),
-      http.get<PageResult<UserType>>('/users', { params: { page_size: 1 } }),
+      projectsApi.list({ page_size: 5 }),
+      filesApi.list({ page_size: 1 }),
+      usersApi.list().catch(() => ({ items: [], total: 0 })),
       taskStore.refresh(true),
     ])
     counts.value = {
-      projects: projects.data.total,
-      files: files.data.total,
-      users: users.data.total,
+      projects: projects.total,
+      files: files.total,
+      users: users.total,
     }
-    recentProjects.value = projects.data.items
+    recentProjects.value = projects.items
   } finally {
     loading.value = false
   }

@@ -1,53 +1,80 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { http, tokenStorageKey } from '@/api/http'
+import { supabase } from '@/lib/supabase'
 import type { User } from '@/types'
 
-const USER_KEY = 'ai-video-user'
-
-function readUser(): User | null {
-  try {
-    return JSON.parse(localStorage.getItem(USER_KEY) || 'null')
-  } catch {
-    return null
-  }
-}
-
 export const useAuthStore = defineStore('auth', () => {
-  const token = ref(localStorage.getItem(tokenStorageKey) || '')
-  const user = ref<User | null>(readUser())
-  const loggedIn = computed(() => Boolean(token.value))
+  const user = ref<User | null>(null)
+  const ready = ref(false)
+  const loggedIn = computed(() => Boolean(user.value))
 
-  async function login(username: string, password: string) {
-    const { data } = await http.post<{ access_token: string; user: User }>('/auth/login', {
-      username,
-      password,
-    })
-    token.value = data.access_token
-    user.value = data.user
-    localStorage.setItem(tokenStorageKey, data.access_token)
-    localStorage.setItem(USER_KEY, JSON.stringify(data.user))
+  /** 从 profiles 拉取档案，组装成前端 User。 */
+  async function loadProfile() {
+    const { data: auth } = await supabase.auth.getUser()
+    if (!auth.user) {
+      user.value = null
+      return null
+    }
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', auth.user.id)
+      .single()
+    user.value = {
+      id: auth.user.id,
+      email: auth.user.email ?? '',
+      username: profile?.username ?? auth.user.email ?? '',
+      nickname: profile?.nickname ?? '',
+      role: (profile?.role ?? 'USER') as User['role'],
+      status: (profile?.status ?? 'ENABLED') as User['status'],
+      last_login_time: profile?.last_login_time ?? null,
+      created_at: profile?.created_at ?? new Date().toISOString(),
+      updated_at: profile?.updated_at ?? new Date().toISOString(),
+    }
+    return user.value
   }
 
-  async function loadProfile() {
-    if (!token.value) return
-    const { data } = await http.get<User>('/auth/me')
-    user.value = data
-    localStorage.setItem(USER_KEY, JSON.stringify(data))
+  async function login(email: string, password: string) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    if (error) throw new Error(translateAuthError(error.message))
+    const profile = await loadProfile()
+    if (profile) {
+      await supabase
+        .from('profiles')
+        .update({ last_login_time: new Date().toISOString() })
+        .eq('id', profile.id)
+    }
+    return profile
   }
 
   async function logout() {
-    try {
-      if (token.value) await http.post('/auth/logout')
-    } finally {
-      token.value = ''
-      user.value = null
-      localStorage.removeItem(tokenStorageKey)
-      localStorage.removeItem(USER_KEY)
-    }
+    await supabase.auth.signOut()
+    user.value = null
   }
 
-  return { token, user, loggedIn, login, loadProfile, logout }
+  /** 初始化：恢复会话并监听登录状态变化。 */
+  async function init() {
+    await loadProfile()
+    ready.value = true
+    supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        user.value = null
+      } else {
+        void loadProfile()
+      }
+    })
+  }
+
+  return { user, ready, loggedIn, login, logout, loadProfile, init }
 })
 
+function translateAuthError(message: string): string {
+  const map: Record<string, string> = {
+    'Invalid login credentials': '邮箱或密码错误',
+    'Email not confirmed': '邮箱尚未确认，请联系管理员',
+    'User already registered': '该邮箱已注册',
+    'Password should be at least 6 characters': '密码至少 6 位',
+  }
+  return map[message] ?? message
+}

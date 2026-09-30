@@ -3,8 +3,8 @@ import { Connection, Delete, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onActivated, reactive, ref } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { ModelConfig, PageResult } from '@/types'
+import { errorMessage, modelConfigsApi, secretsApi } from '@/api'
+import type { ApiSecret, ModelConfig } from '@/types'
 
 const modelTypes = [{ label: '文本', value: 'TEXT' }, { label: '图片', value: 'IMAGE' }, { label: '视频', value: 'VIDEO' }]
 const videoProtocols = [
@@ -20,22 +20,28 @@ const testingId = ref<number | null>(null)
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const items = ref<ModelConfig[]>([])
+const secrets = ref<ApiSecret[]>([])
 const total = ref(0)
 const filters = reactive({ keyword: '', modelType: '', status: '', page: 1, pageSize: 20 })
-const form = reactive({ name: '', model_type: 'TEXT' as ModelConfig['model_type'], video_protocol: 'COMFYUI', provider: '', base_url: '', model_name: '', api_key: '', api_key_env: '', extraConfigText: '{}', status: 'ENABLED' as ModelConfig['status'], is_default: false })
+const form = reactive({ name: '', model_type: 'TEXT' as ModelConfig['model_type'], video_protocol: 'COMFYUI', provider: '', base_url: '', model_name: '', secret_ref: '', extraConfigText: '{}', status: 'ENABLED' as ModelConfig['status'], is_default: false })
 
 async function loadData() {
   loading.value = true
   try {
-    const { data } = await http.get<PageResult<ModelConfig>>('/model-configs', { params: { keyword: filters.keyword || undefined, model_type: filters.modelType || undefined, status: filters.status || undefined, page: filters.page, page_size: filters.pageSize } })
-    items.value = data.items
-    total.value = data.total
+    const result = await modelConfigsApi.list({ keyword: filters.keyword || undefined, model_type: filters.modelType || undefined, status: filters.status || undefined, page: filters.page, page_size: filters.pageSize })
+    items.value = result.items
+    total.value = result.total
   } catch (error) { ElMessage.error(errorMessage(error, '模型配置加载失败')) } finally { loading.value = false }
+}
+
+/** 拉取密钥列表填充下拉框；失败不阻塞页面。 */
+async function loadSecrets() {
+  try { secrets.value = await secretsApi.list() } catch { secrets.value = [] }
 }
 
 function openCreate() {
   editingId.value = null
-  Object.assign(form, { name: '', model_type: 'TEXT', video_protocol: 'COMFYUI', provider: '', base_url: '', model_name: '', api_key: '', api_key_env: '', extraConfigText: '{}', status: 'ENABLED', is_default: false })
+  Object.assign(form, { name: '', model_type: 'TEXT', video_protocol: 'COMFYUI', provider: '', base_url: '', model_name: '', secret_ref: '', extraConfigText: '{}', status: 'ENABLED', is_default: false })
   dialogVisible.value = true
 }
 
@@ -51,7 +57,7 @@ function inferVideoProtocol(item: ModelConfig) {
 
 function openEdit(item: ModelConfig) {
   editingId.value = item.id
-  Object.assign(form, { name: item.name, model_type: item.model_type, video_protocol: inferVideoProtocol(item), provider: item.provider, base_url: item.base_url || '', model_name: item.model_name, api_key: '', api_key_env: '', extraConfigText: JSON.stringify(item.extra_config, null, 2), status: item.status, is_default: item.is_default })
+  Object.assign(form, { name: item.name, model_type: item.model_type, video_protocol: inferVideoProtocol(item), provider: item.provider, base_url: item.base_url || '', model_name: item.model_name, secret_ref: item.secret_ref || '', extraConfigText: JSON.stringify(item.extra_config, null, 2), status: item.status, is_default: item.is_default })
   dialogVisible.value = true
 }
 
@@ -76,9 +82,9 @@ async function save() {
   else delete extra_config.protocol
   saving.value = true
   try {
-    const payload = { name: form.name.trim(), model_type: form.model_type, provider: form.provider.trim(), base_url: form.base_url.trim() || null, model_name: form.model_name.trim(), api_key: form.api_key.trim() || undefined, api_key_env: form.api_key_env.trim() || undefined, extra_config, status: form.status, is_default: form.is_default }
-    if (editingId.value) await http.put(`/model-configs/${editingId.value}`, payload)
-    else await http.post('/model-configs', payload)
+    const payload = { name: form.name.trim(), model_type: form.model_type, provider: form.provider.trim(), base_url: form.base_url.trim() || null, model_name: form.model_name.trim(), secret_ref: form.secret_ref.trim() || null, extra_config, status: form.status, is_default: form.is_default }
+    if (editingId.value) await modelConfigsApi.update(editingId.value, payload)
+    else await modelConfigsApi.create(payload)
     ElMessage.success(editingId.value ? '模型配置已更新' : '模型配置已创建')
     dialogVisible.value = false
     await loadData()
@@ -88,7 +94,7 @@ async function save() {
 async function remove(item: ModelConfig) {
   try {
     await ElMessageBox.confirm(`确定删除“${item.name}”吗？`, '删除模型配置', { type: 'warning' })
-    await http.delete(`/model-configs/${item.id}`)
+    await modelConfigsApi.remove(item.id)
     ElMessage.success('模型配置已删除')
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
@@ -97,13 +103,16 @@ async function remove(item: ModelConfig) {
 async function testConnection(item: ModelConfig) {
   testingId.value = item.id
   try {
-    const { data } = await http.post<{ ok: boolean; message: string }>(`/model-configs/${item.id}/test`)
-    ElMessage.success(data.message)
+    const result = await modelConfigsApi.test(item.id)
+    ElMessage.success(result.message)
   } catch (error) { ElMessage.error(errorMessage(error, '连接测试失败')) } finally { testingId.value = null }
 }
 
+/** 从已加载的密钥列表里找到引用名对应的掩码，用于表格展示。 */
+const secretMasks = () => new Map(secrets.value.map((item) => [item.secret_ref, item.masked || '已配置']))
+
 function search() { filters.page = 1; loadData() }
-onActivated(loadData)
+onActivated(() => { loadData(); loadSecrets() })
 </script>
 
 <template>
@@ -117,7 +126,7 @@ onActivated(loadData)
         <el-table-column prop="provider" label="厂商" min-width="150" />
         <el-table-column prop="model_name" label="模型名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="base_url" label="接口地址" min-width="240" show-overflow-tooltip><template #default="{ row }"><span :class="{ muted: !row.base_url }">{{ row.base_url || '使用厂商默认地址' }}</span></template></el-table-column>
-        <el-table-column label="Key" width="120"><template #default="{ row }"><span :class="{ muted: !row.has_api_key }">{{ row.api_key_masked || '未配置' }}</span></template></el-table-column>
+        <el-table-column label="密钥" min-width="190" show-overflow-tooltip><template #default="{ row }"><span v-if="row.secret_ref" class="secret-cell"><code class="mono-inline">{{ secretMasks().get(row.secret_ref) || row.secret_ref }}</code></span><span v-else class="muted">未配置</span></template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 'ENABLED' ? 'success' : 'info'" effect="plain">{{ row.status === 'ENABLED' ? '启用' : '停用' }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="230" fixed="right"><template #default="{ row }"><el-button text type="primary" :icon="Connection" :loading="testingId === row.id" @click="testConnection(row)">测试</el-button><el-button text :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="danger" :icon="Delete" @click="remove(row)">删除</el-button></template></el-table-column>
       </el-table>
@@ -129,8 +138,12 @@ onActivated(loadData)
         <el-form-item v-if="form.model_type === 'VIDEO'" label="视频接口协议" required><el-select v-model="form.video_protocol" style="width: 100%" @change="applyVideoProtocol"><el-option v-for="item in videoProtocols" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
         <div class="form-grid"><el-form-item label="厂商" required><el-input v-model="form.provider" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'AutoDL ComfyUI' : '例如 OpenAI Compatible'" /></el-form-item><el-form-item :label="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? '工作流 ID' : '模型名称'" required><el-input v-model="form.model_name" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? '例如 minimax_h3_image_audio_to_video_v2_15s' : '厂商提供的模型 ID'" /></el-form-item></div>
         <el-form-item :label="form.model_type === 'VIDEO' ? '任务提交地址' : '接口地址'"><el-input v-model="form.base_url" :placeholder="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'https://autodl.art/api/v1/comfyui/comfyui_workflow' : 'https://api.example.com/v1'" /></el-form-item>
-        <el-form-item :label="form.model_type === 'VIDEO' && form.video_protocol === 'COMFYUI' ? 'ComfyUI Token' : 'API Key'"><el-input v-model="form.api_key" type="password" show-password autocomplete="new-password" :placeholder="editingId ? '留空则保留当前 Key' : '输入模型服务 API Key'" /></el-form-item>
-        <el-form-item label="API Key 环境变量"><el-input v-model="form.api_key_env" placeholder="可选，例如 OPENAI_API_KEY" /></el-form-item>
+        <el-form-item label="密钥">
+          <el-select v-model="form.secret_ref" clearable filterable placeholder="选择要使用的密钥" style="width: 100%">
+            <el-option v-for="item in secrets" :key="item.id" :label="`${item.name}（${item.masked || item.secret_ref}）`" :value="item.secret_ref" />
+          </el-select>
+          <div class="field-tip">密钥在「密钥管理」页面维护，此处只需选择引用名。</div>
+        </el-form-item>
         <el-form-item label="扩展参数（JSON）"><el-input v-model="form.extraConfigText" type="textarea" :rows="4" class="mono" /></el-form-item>
         <div class="form-grid"><el-form-item label="状态"><el-segmented v-model="form.status" :options="[{ label: '启用', value: 'ENABLED' }, { label: '停用', value: 'DISABLED' }]" /></el-form-item><el-form-item label="默认模型"><el-switch v-model="form.is_default" active-text="设为该类型默认模型" /></el-form-item></div>
       </el-form>
@@ -139,4 +152,4 @@ onActivated(loadData)
   </div>
 </template>
 
-<style scoped>.default-tag { margin-left: 8px; } .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 620px) { .form-grid { grid-template-columns: 1fr; gap: 0; } }</style>
+<style scoped>.default-tag { margin-left: 8px; } .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } .mono-inline { padding: 1px 6px; background: #f2f5f3; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #6a716c; } .field-tip { margin-top: 4px; color: #8a918c; font-size: 12px; line-height: 1.5; } @media (max-width: 620px) { .form-grid { grid-template-columns: 1fr; gap: 0; } }</style>

@@ -1,0 +1,7 @@
+name = "ai-video-workflow"
+version = "0.1.0"
+description = "AI Video Workflow — Supabase backend"
+requires-python = ">=3.10"
+
+[tool.deno]
+# Edge Functions 运行时为 Deno，由 Supabase 托管

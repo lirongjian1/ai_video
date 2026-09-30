@@ -3,8 +3,8 @@ import { Delete, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onActivated, reactive, ref } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { PageResult, Project } from '@/types'
+import { errorMessage, projectsApi } from '@/api'
+import type { Project } from '@/types'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -18,13 +18,11 @@ const form = reactive({ name: '', description: '', status: 'ACTIVE' as Project['
 async function loadProjects() {
   loading.value = true
   try {
-    const { data } = await http.get<PageResult<Project>>('/projects', {
-      params: {
-        keyword: filters.keyword || undefined,
-        status: filters.status || undefined,
-        page: filters.page,
-        page_size: filters.pageSize,
-      },
+    const data = await projectsApi.list({
+      keyword: filters.keyword || undefined,
+      status: filters.status || undefined,
+      page: filters.page,
+      page_size: filters.pageSize,
     })
     projects.value = data.items
     total.value = data.total
@@ -56,8 +54,8 @@ async function saveProject() {
   saving.value = true
   try {
     const payload = { ...form, name: form.name.trim(), description: form.description.trim() || null }
-    if (editingId.value) await http.put(`/projects/${editingId.value}`, payload)
-    else await http.post('/projects', payload)
+    if (editingId.value) await projectsApi.update(editingId.value, payload)
+    else await projectsApi.create(payload)
     ElMessage.success(editingId.value ? '项目已更新' : '项目已创建')
     dialogVisible.value = false
     await loadProjects()
@@ -75,7 +73,7 @@ async function removeProject(project: Project) {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
     })
-    await http.delete(`/projects/${project.id}`)
+    await projectsApi.remove(project.id)
     ElMessage.success('项目已删除')
     await loadProjects()
   } catch (error) {

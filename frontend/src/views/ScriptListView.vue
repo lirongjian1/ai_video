@@ -3,8 +3,9 @@ import { Delete, Edit, MagicStick, Plus, Search, Tickets, VideoPlay } from '@ele
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onActivated, reactive, ref } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { AiFile, Character, ModelConfig, PageResult, Project, Scene, Script, Storyboard } from '@/types'
+import { charactersApi, errorMessage, filesApi, modelConfigsApi, projectsApi, scenesApi, scriptsApi, storyboardsApi, tasksApi } from '@/api'
+import { publicUrl } from '@/lib/supabase'
+import type { AiFile, Character, ModelConfig, Project, Scene, Script, Storyboard } from '@/types'
 
 const loading = ref(false)
 const saving = ref(false)
@@ -44,6 +45,7 @@ const videoForm = reactive({
 const maxReferenceImages = 9
 
 function projectName(id: number) { return projects.value.find((item) => item.id === id)?.name || `项目 #${id}` }
+function imageUrl(item: AiFile) { return item.thumbnail_path || publicUrl(item.storage_path) }
 function sceneName(id: number | null) { return id ? scenes.value.find((item) => item.id === id)?.name || `场景 #${id}` : '未关联' }
 function characterNames(ids: number[]) { return ids.map((id) => characters.value.find((item) => item.id === id)?.name || `#${id}`).join('、') || '未关联' }
 function statusLabel(status: Script['status']) { return { DRAFT: '草稿', READY: '已就绪', ARCHIVED: '已归档' }[status] }
@@ -52,18 +54,18 @@ async function loadData() {
   loading.value = true
   try {
     const [scriptResult, projectResult, textModelResult, videoModelResult, imageResult] = await Promise.all([
-      http.get<PageResult<Script>>('/scripts', { params: { keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize } }),
-      http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } }),
-      http.get<PageResult<ModelConfig>>('/model-configs', { params: { model_type: 'TEXT', status: 'ENABLED', page_size: 100 } }),
-      http.get<PageResult<ModelConfig>>('/model-configs', { params: { model_type: 'VIDEO', status: 'ENABLED', page_size: 100 } }),
-      http.get<PageResult<AiFile>>('/files', { params: { file_type: 'IMAGE', page_size: 100 } }),
+      scriptsApi.list({ keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize }),
+      projectsApi.list({ page_size: 100 }),
+      modelConfigsApi.list({ model_type: 'TEXT', status: 'ENABLED', page_size: 100 }),
+      modelConfigsApi.list({ model_type: 'VIDEO', status: 'ENABLED', page_size: 100 }),
+      filesApi.list({ file_type: 'IMAGE', page_size: 100 }),
     ])
-    scripts.value = scriptResult.data.items
-    total.value = scriptResult.data.total
-    projects.value = projectResult.data.items
-    textModels.value = textModelResult.data.items
-    videoModels.value = videoModelResult.data.items
-    images.value = imageResult.data.items
+    scripts.value = scriptResult.items
+    total.value = scriptResult.total
+    projects.value = projectResult.items
+    textModels.value = textModelResult.items
+    videoModels.value = videoModelResult.items
+    images.value = imageResult.items
   } catch (error) { ElMessage.error(errorMessage(error, '剧本加载失败')) } finally { loading.value = false }
 }
 
@@ -77,7 +79,13 @@ async function generateScript() {
   if (!generateForm.project_id || !generateForm.title.trim() || !generateForm.keywords.trim() || !generateForm.model_config_id) return ElMessage.warning('请选择项目和文本模型，并填写剧本名称与关键词')
   generating.value = true
   try {
-    await http.post('/scripts/generate', { ...generateForm, title: generateForm.title.trim(), keywords: generateForm.keywords.trim(), style: generateForm.style.trim() || null }, { timeout: 180000 })
+    await scriptsApi.generate({
+      project_id: generateForm.project_id,
+      model_config_id: generateForm.model_config_id,
+      title: generateForm.title.trim(),
+      keywords: generateForm.keywords.trim(),
+      style: generateForm.style.trim() || undefined,
+    })
     ElMessage.success('六段 10 秒分镜已生成')
     generateVisible.value = false
     await loadData()
@@ -99,8 +107,8 @@ async function save() {
   saving.value = true
   try {
     const payload = { project_id: form.project_id, title: form.title.trim(), summary: form.summary.trim() || null, content: form.content, duration: form.duration, status: form.status }
-    if (editingId.value) await http.put(`/scripts/${editingId.value}`, payload)
-    else await http.post('/scripts', payload)
+    if (editingId.value) await scriptsApi.update(editingId.value, payload)
+    else await scriptsApi.create(payload)
     ElMessage.success(editingId.value ? '剧本已更新' : '剧本已创建')
     dialogVisible.value = false
     await loadData()
@@ -109,7 +117,7 @@ async function save() {
 async function remove(item: Script) {
   try {
     await ElMessageBox.confirm(`确定删除剧本“${item.title}”及其全部分镜吗？`, '删除剧本', { type: 'warning' })
-    await http.delete(`/scripts/${item.id}`)
+    await scriptsApi.remove(item.id)
     ElMessage.success('剧本已删除')
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
@@ -120,13 +128,13 @@ async function manageStoryboards(item: Script) {
   drawerVisible.value = true
   try {
     const [boardResult, sceneResult, characterResult] = await Promise.all([
-      http.get<PageResult<Storyboard>>('/storyboards', { params: { script_id: item.id, page_size: 200 } }),
-      http.get<PageResult<Scene>>('/scenes', { params: { project_id: item.project_id, page_size: 100 } }),
-      http.get<PageResult<Character>>('/characters', { params: { project_id: item.project_id, page_size: 100 } }),
+      storyboardsApi.list({ script_id: item.id, page_size: 200 }),
+      scenesApi.list({ project_id: item.project_id, page_size: 100 }),
+      charactersApi.list({ project_id: item.project_id, page_size: 100 }),
     ])
-    storyboards.value = boardResult.data.items
-    scenes.value = sceneResult.data.items
-    characters.value = characterResult.data.items
+    storyboards.value = boardResult.items
+    scenes.value = sceneResult.items
+    characters.value = characterResult.items
   } catch (error) { ElMessage.error(errorMessage(error, '分镜加载失败')) }
 }
 function openBoardCreate() {
@@ -143,9 +151,9 @@ async function saveBoard() {
   if (!selectedScript.value || !boardForm.title.trim()) return ElMessage.warning('请填写分镜标题')
   boardSaving.value = true
   try {
-    const payload = { script_id: selectedScript.value.id, sequence: boardForm.sequence, title: boardForm.title.trim(), description: boardForm.description.trim() || null, duration: boardForm.duration, camera: boardForm.camera.trim() || null, dialogue: boardForm.dialogue.trim() || null, video_prompt: boardForm.video_prompt.trim() || null, scene_id: boardForm.scene_id, character_ids: boardForm.character_ids, reference_file_ids: [], status: boardForm.status }
-    if (boardEditingId.value) await http.put(`/storyboards/${boardEditingId.value}`, payload)
-    else await http.post('/storyboards', payload)
+    const payload = { script_id: selectedScript.value.id, project_id: selectedScript.value.project_id, sequence: boardForm.sequence, title: boardForm.title.trim(), description: boardForm.description.trim() || null, duration: boardForm.duration, camera: boardForm.camera.trim() || null, dialogue: boardForm.dialogue.trim() || null, video_prompt: boardForm.video_prompt.trim() || null, scene_id: boardForm.scene_id, character_ids: boardForm.character_ids, reference_file_ids: [], status: boardForm.status }
+    if (boardEditingId.value) await storyboardsApi.update(boardEditingId.value, payload)
+    else await storyboardsApi.create(payload)
     ElMessage.success(boardEditingId.value ? '分镜已更新' : '分镜已添加')
     boardDialogVisible.value = false
     await manageStoryboards(selectedScript.value)
@@ -155,7 +163,7 @@ async function saveBoard() {
 async function removeBoard(item: Storyboard) {
   try {
     await ElMessageBox.confirm(`确定删除分镜“${item.title}”吗？`, '删除分镜', { type: 'warning' })
-    await http.delete(`/storyboards/${item.id}`)
+    await storyboardsApi.remove(item.id)
     ElMessage.success('分镜已删除')
     if (selectedScript.value) await manageStoryboards(selectedScript.value)
     await loadData()
@@ -204,9 +212,9 @@ async function submitVideoGeneration() {
       reference_file_ids: videoForm.reference_file_ids,
       duration: videoForm.duration,
       resolution: videoForm.resolution,
-      seed: videoForm.seed,
+      seed: videoForm.seed ?? undefined,
     }
-    await Promise.all(targets.map((item) => http.post(`/storyboards/${item.id}/generate-video`, payload)))
+    await Promise.all(targets.map((item) => tasksApi.generateVideo({ storyboard_id: item.id, ...payload })))
     ElMessage.success(`${targets.length} 个视频生成任务已加入队列`)
     videoDialogVisible.value = false
   } catch (error) { ElMessage.error(errorMessage(error, '创建视频任务失败')) } finally { videoSubmitting.value = false }
@@ -274,7 +282,7 @@ onActivated(loadData)
             <el-empty v-if="!images.length" description="图片库暂无图片" :image-size="68" />
             <div v-else class="image-option-grid">
               <button v-for="item in images" :key="item.id" class="image-option" :class="{ selected: selectedImageOrder(item.id) }" type="button" :aria-label="`${selectedImageOrder(item.id) ? '取消选择' : '选择'} ${item.file_name}`" @click="toggleReferenceImage(item.id)">
-                <el-image :src="item.thumbnail_url || item.url" fit="cover" loading="lazy" />
+                <el-image :src="imageUrl(item)" fit="cover" loading="lazy" />
                 <span v-if="selectedImageOrder(item.id)" class="image-order">{{ selectedImageOrder(item.id) }}</span>
                 <span class="image-name" :title="item.file_name">{{ item.file_name }}</span>
               </button>

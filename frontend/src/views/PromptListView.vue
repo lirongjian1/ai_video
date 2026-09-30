@@ -3,8 +3,8 @@ import { Delete, DocumentCopy, Edit, MagicStick, Plus, Search } from '@element-p
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onActivated, reactive, ref } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { ModelConfig, PageResult, Project, Prompt } from '@/types'
+import { errorMessage, modelConfigsApi, projectsApi, promptsApi } from '@/api'
+import type { ModelConfig, Project, Prompt } from '@/types'
 
 const promptTypes = [
   { label: '角色', value: 'CHARACTER' }, { label: '场景', value: 'SCENE' },
@@ -38,14 +38,14 @@ async function loadData() {
   loading.value = true
   try {
     const [promptResult, projectResult, modelResult] = await Promise.all([
-      http.get<PageResult<Prompt>>('/prompts', { params: { keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, prompt_type: filters.promptType || undefined, page: filters.page, page_size: filters.pageSize } }),
-      http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } }),
-      http.get<PageResult<ModelConfig>>('/model-configs', { params: { model_type: 'TEXT', status: 'ENABLED', page_size: 100 } }),
+      promptsApi.list({ keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, prompt_type: filters.promptType || undefined, page: filters.page, page_size: filters.pageSize }),
+      projectsApi.list({ page_size: 100 }),
+      modelConfigsApi.list({ model_type: 'TEXT', status: 'ENABLED', page_size: 100 }),
     ])
-    prompts.value = promptResult.data.items
-    total.value = promptResult.data.total
-    projects.value = projectResult.data.items
-    textModels.value = modelResult.data.items
+    prompts.value = promptResult.items
+    total.value = promptResult.total
+    projects.value = projectResult.items
+    textModels.value = modelResult.items
   } catch (error) {
     ElMessage.error(errorMessage(error, '提示词加载失败'))
   } finally { loading.value = false }
@@ -58,10 +58,11 @@ function openGenerate() {
 }
 
 async function generatePrompt() {
-  if (!generateForm.name.trim() || !generateForm.keywords.trim() || !generateForm.model_config_id) return ElMessage.warning('请填写名称、关键内容并选择文本模型')
+  const modelConfigId = generateForm.model_config_id
+  if (!generateForm.name.trim() || !generateForm.keywords.trim() || !modelConfigId) return ElMessage.warning('请填写名称、关键内容并选择文本模型')
   generating.value = true
   try {
-    await http.post('/prompts/generate', { ...generateForm, name: generateForm.name.trim(), keywords: generateForm.keywords.trim() }, { timeout: 180000 })
+    await promptsApi.generate({ project_id: generateForm.project_id, model_config_id: modelConfigId, name: generateForm.name.trim(), keywords: generateForm.keywords.trim(), generation_type: generateForm.generation_type })
     ElMessage.success('提示词生成完成')
     generateVisible.value = false
     await loadData()
@@ -88,8 +89,8 @@ async function save() {
   saving.value = true
   try {
     const payload = { project_id: form.project_id, name: form.name.trim(), prompt_type: form.prompt_type, content: form.content.trim(), negative_prompt: form.negative_prompt.trim() || null, variables, status: form.status }
-    if (editingId.value) await http.put(`/prompts/${editingId.value}`, payload)
-    else await http.post('/prompts', payload)
+    if (editingId.value) await promptsApi.update(editingId.value, payload)
+    else await promptsApi.create(payload)
     ElMessage.success(editingId.value ? '提示词已更新' : '提示词已创建')
     dialogVisible.value = false
     await loadData()
@@ -99,7 +100,7 @@ async function save() {
 async function remove(item: Prompt) {
   try {
     await ElMessageBox.confirm(`确定删除“${item.name}”吗？`, '删除提示词', { type: 'warning' })
-    await http.delete(`/prompts/${item.id}`)
+    await promptsApi.remove(item.id)
     ElMessage.success('提示词已删除')
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }

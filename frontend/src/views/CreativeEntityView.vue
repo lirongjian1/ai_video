@@ -3,8 +3,9 @@ import { Delete, Edit, Plus, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onActivated, reactive, ref, watch } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { AiFile, Character, PageResult, Project, Prompt, Scene } from '@/types'
+import { publicUrl } from '@/lib/supabase'
+import { charactersApi, errorMessage, filesApi, projectsApi, promptsApi, scenesApi } from '@/api'
+import type { AiFile, Character, Project, Prompt, Scene } from '@/types'
 
 const props = defineProps<{ entityType: 'characters' | 'scenes' }>()
 type Entity = Character | Scene
@@ -24,27 +25,30 @@ const total = ref(0)
 const filters = reactive({ keyword: '', projectId: null as number | null, page: 1, pageSize: 20 })
 const form = reactive({ project_id: null as number | null, name: '', description: '', detail1: '', detail2: '', reference_file_id: null as number | null, prompt_id: null as number | null, status: 'ACTIVE' as 'ACTIVE' | 'DISABLED' })
 
+const entityApi = computed(() => (isCharacter.value ? charactersApi : scenesApi))
+
 function projectName(id: number) { return projects.value.find((item) => item.id === id)?.name || `项目 #${id}` }
 function detail1(item: Entity) { return isCharacter.value ? (item as Character).appearance : (item as Scene).environment }
+function imageUrl(item: AiFile) { return item.thumbnail_path || publicUrl(item.storage_path) }
 
 async function loadOptions() {
   const promptType = isCharacter.value ? 'CHARACTER' : 'SCENE'
   const [projectResult, promptResult, imageResult] = await Promise.all([
-    http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } }),
-    http.get<PageResult<Prompt>>('/prompts', { params: { prompt_type: promptType, page_size: 100 } }),
-    http.get<PageResult<AiFile>>('/files', { params: { file_type: 'IMAGE', page_size: 100 } }),
+    projectsApi.list({ page_size: 100 }),
+    promptsApi.list({ prompt_type: promptType, page_size: 100 }),
+    filesApi.list({ file_type: 'IMAGE', page_size: 100 }),
   ])
-  projects.value = projectResult.data.items
-  prompts.value = promptResult.data.items
-  images.value = imageResult.data.items
+  projects.value = projectResult.items
+  prompts.value = promptResult.items
+  images.value = imageResult.items
 }
 
 async function loadData() {
   loading.value = true
   try {
-    const { data } = await http.get<PageResult<Entity>>(`/${props.entityType}`, { params: { keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize } })
-    items.value = data.items
-    total.value = data.total
+    const result = await entityApi.value.list({ keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize })
+    items.value = result.items
+    total.value = result.total
     await loadOptions()
   } catch (error) { ElMessage.error(errorMessage(error, `${labels.value.noun}加载失败`)) } finally { loading.value = false }
 }
@@ -70,8 +74,8 @@ async function save() {
   else Object.assign(payload, { environment: form.detail1.trim() || null, atmosphere: form.detail2.trim() || null })
   saving.value = true
   try {
-    if (editingId.value) await http.put(`/${props.entityType}/${editingId.value}`, payload)
-    else await http.post(`/${props.entityType}`, payload)
+    if (editingId.value) await entityApi.value.update(editingId.value, payload)
+    else await entityApi.value.create(payload)
     ElMessage.success(editingId.value ? `${labels.value.noun}已更新` : `${labels.value.noun}已创建`)
     dialogVisible.value = false
     await loadData()
@@ -81,7 +85,7 @@ async function save() {
 async function remove(item: Entity) {
   try {
     await ElMessageBox.confirm(`确定删除${labels.value.noun}“${item.name}”吗？`, `删除${labels.value.noun}`, { type: 'warning' })
-    await http.delete(`/${props.entityType}/${item.id}`)
+    await entityApi.value.remove(item.id)
     ElMessage.success(`${labels.value.noun}已删除`)
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
@@ -102,7 +106,7 @@ onActivated(loadData)
         <el-table-column label="归属项目" min-width="160"><template #default="{ row }">{{ projectName(row.project_id) }}</template></el-table-column>
         <el-table-column prop="description" label="描述" min-width="240" show-overflow-tooltip><template #default="{ row }"><span :class="{ muted: !row.description }">{{ row.description || '暂无描述' }}</span></template></el-table-column>
         <el-table-column :label="labels.detail1" min-width="220" show-overflow-tooltip><template #default="{ row }"><span :class="{ muted: !detail1(row) }">{{ detail1(row) || '未设置' }}</span></template></el-table-column>
-        <el-table-column label="参考图" width="85"><template #default="{ row }"><el-image v-if="row.reference_file_id && images.find((item) => item.id === row.reference_file_id)" :src="images.find((item) => item.id === row.reference_file_id)?.url" fit="cover" class="reference-thumb" :preview-src-list="[images.find((item) => item.id === row.reference_file_id)?.url || '']" preview-teleported /><span v-else class="muted">无</span></template></el-table-column>
+        <el-table-column label="参考图" width="85"><template #default="{ row }"><el-image v-if="row.reference_file_id && images.find((item) => item.id === row.reference_file_id)" :src="imageUrl(images.find((item) => item.id === row.reference_file_id)!)" fit="cover" class="reference-thumb" :preview-src-list="[imageUrl(images.find((item) => item.id === row.reference_file_id)!)]" preview-teleported /><span v-else class="muted">无</span></template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 'ACTIVE' ? 'success' : 'info'" effect="plain">{{ row.status === 'ACTIVE' ? '启用' : '停用' }}</el-tag></template></el-table-column>
         <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button text type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button><el-button text type="danger" :icon="Delete" @click="remove(row)">删除</el-button></template></el-table-column>
       </el-table>

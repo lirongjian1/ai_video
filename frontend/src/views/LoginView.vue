@@ -4,20 +4,20 @@ import { ElMessage } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 
-const form = reactive({ username: 'admin', password: 'admin123' })
+const form = reactive({ email: '', password: '' })
 const loading = ref(false)
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
 async function submit() {
-  if (!form.username || !form.password) return ElMessage.warning('请输入用户名和密码')
+  if (!form.email || !form.password) return ElMessage.warning('请输入邮箱和密码')
   loading.value = true
   try {
-    await auth.login(form.username.trim(), form.password)
+    await auth.login(form.email.trim(), form.password)
     await router.replace(String(route.query.redirect || '/'))
   } catch (error) {
     ElMessage.error(errorMessage(error, '登录失败'))
@@ -47,14 +47,14 @@ async function submit() {
         <p class="login-subtitle">使用系统账号继续</p>
         <el-form :model="form" size="large" @submit.prevent="submit">
           <el-form-item>
-            <el-input v-model="form.username" placeholder="用户名" autocomplete="username" :prefix-icon="User" />
+            <el-input v-model="form.email" placeholder="邮箱" autocomplete="username" :prefix-icon="User" />
           </el-form-item>
           <el-form-item>
             <el-input v-model="form.password" type="password" placeholder="密码" autocomplete="current-password" show-password :prefix-icon="Lock" @keyup.enter="submit" />
           </el-form-item>
           <el-button type="primary" native-type="button" :loading="loading" class="login-button" @click="submit">登录</el-button>
         </el-form>
-        <p class="default-account">测试账号：<strong>admin</strong> / <strong>admin123</strong></p>
+        <p class="default-account">账号需先在 Supabase 后台创建，使用邮箱与密码登录</p>
       </div>
     </section>
   </main>

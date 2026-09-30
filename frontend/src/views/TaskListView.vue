@@ -3,8 +3,8 @@ import { CircleClose, Delete, RefreshRight, Search } from '@element-plus/icons-v
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onActivated, onDeactivated, reactive, ref } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { AiTask, PageResult, Project } from '@/types'
+import { errorMessage, projectsApi, tasksApi } from '@/api'
+import type { AiTask, Project } from '@/types'
 
 const typeLabels: Record<AiTask['task_type'], string> = { TEXT: '文本生成', IMAGE: '图片生成', VIDEO: '视频生成', MERGE: '视频合成' }
 const statusLabels: Record<AiTask['status'], string> = { PENDING: '等待中', RUNNING: '执行中', SUCCESS: '成功', FAILED: '失败', CANCELLED: '已取消' }
@@ -17,26 +17,26 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 function projectName(id: number | null) { return id ? projects.value.find((item) => item.id === id)?.name || `项目 #${id}` : '未归属项目' }
 function tagType(status: AiTask['status']) { return status === 'SUCCESS' ? 'success' : status === 'FAILED' ? 'danger' : status === 'RUNNING' ? 'warning' : 'info' }
-function providerTaskId(item: AiTask) { return String(item.result_payload?.provider_task_id || '') }
-function providerStatus(item: AiTask) { return String(item.result_payload?.provider_status || '') }
+function providerTaskId(item: AiTask) { return String(item.provider_task_id || item.result_payload?.provider_task_id || '') }
+function providerStatus(item: AiTask) { return String(item.provider_status || item.result_payload?.provider_status || '') }
 
 async function loadData(silent = false) {
   if (!silent) loading.value = true
   try {
     const [taskResult, projectResult] = await Promise.all([
-      http.get<PageResult<AiTask>>('/tasks', { params: { keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, task_type: filters.taskType || undefined, status: filters.status || undefined, page: filters.page, page_size: filters.pageSize } }),
-      http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } }),
+      tasksApi.list({ keyword: filters.keyword || undefined, project_id: filters.projectId || undefined, task_type: filters.taskType || undefined, status: filters.status || undefined, page: filters.page, page_size: filters.pageSize }),
+      projectsApi.list({ page_size: 100 }),
     ])
-    items.value = taskResult.data.items
-    total.value = taskResult.data.total
-    projects.value = projectResult.data.items
+    items.value = taskResult.items
+    total.value = taskResult.total
+    projects.value = projectResult.items
   } catch (error) { if (!silent) ElMessage.error(errorMessage(error, '任务加载失败')) } finally { loading.value = false }
 }
 
 async function cancel(item: AiTask) {
   try {
     await ElMessageBox.confirm(`确定取消任务“${item.name}”吗？`, '取消任务', { type: 'warning' })
-    await http.post(`/tasks/${item.id}/cancel`)
+    await tasksApi.cancel(item.id)
     ElMessage.success('任务已取消')
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
@@ -44,7 +44,7 @@ async function cancel(item: AiTask) {
 async function remove(item: AiTask) {
   try {
     await ElMessageBox.confirm(`确定删除任务记录“${item.name}”吗？`, '删除任务', { type: 'warning' })
-    await http.delete(`/tasks/${item.id}`)
+    await tasksApi.remove(item.id)
     ElMessage.success('任务记录已删除')
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }

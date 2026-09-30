@@ -7,6 +7,7 @@ import {
   Film,
   Fold,
   HomeFilled,
+  Key,
   MagicStick,
   Menu as MenuIcon,
   Picture,
@@ -43,6 +44,7 @@ const menuItems: MenuEntry[] = [
   { path: '/videos', title: '视频管理', icon: Film },
   { path: '/video-merge', title: '视频合成', icon: MenuIcon },
   { path: '/models', title: '模型管理', icon: Setting },
+  { path: '/secrets', title: '密钥管理', icon: Key },
   { path: '/users', title: '用户管理', icon: User },
 ]
 

@@ -3,8 +3,15 @@ import { CopyDocument, Delete, Download, Edit, MagicStick, Plus, Search, VideoPl
 import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
 import { computed, onActivated, reactive, ref, watch } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { AiFile, ModelConfig, PageResult, Project, Prompt, Script, Storyboard } from '@/types'
+import { errorMessage, filesApi, modelConfigsApi, projectsApi, promptsApi, publicUrl, scriptsApi, storyboardsApi, tasksApi } from '@/api'
+import { supabase } from '@/lib/supabase'
+import type { AiFile, ModelConfig, Project, Prompt, Script, Storyboard } from '@/types'
+
+/** filesApi 未暴露重命名方法，这里直接更新 files.file_name。 */
+async function renameStoredFile(id: number, fileName: string) {
+  const { error } = await supabase.from('files').update({ file_name: fileName }).eq('id', id)
+  if (error) throw new Error(error.message)
+}
 
 const props = defineProps<{ fileType: 'IMAGE' | 'VIDEO' }>()
 const isImage = computed(() => props.fileType === 'IMAGE')
@@ -56,27 +63,27 @@ async function loadData() {
   loading.value = true
   try {
     const [fileResult, projectResult, promptResult, modelResult, videoOptions] = await Promise.all([
-      http.get<PageResult<AiFile>>('/files', { params: { keyword: filters.keyword || undefined, file_type: props.fileType, source_type: filters.sourceType || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize } }),
-      http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } }),
-      http.get<PageResult<Prompt>>('/prompts', { params: { status: 'ENABLED', page_size: 100 } }),
-      http.get<PageResult<ModelConfig>>('/model-configs', { params: { model_type: 'IMAGE', status: 'ENABLED', page_size: 100 } }),
+      filesApi.list({ keyword: filters.keyword || undefined, file_type: props.fileType, source_type: filters.sourceType || undefined, project_id: filters.projectId || undefined, page: filters.page, page_size: filters.pageSize }),
+      projectsApi.list({ page_size: 100 }),
+      promptsApi.list({ status: 'ENABLED', page_size: 100 }),
+      modelConfigsApi.list({ model_type: 'IMAGE', status: 'ENABLED', page_size: 100 }),
       isImage.value ? Promise.resolve(null) : Promise.all([
-        http.get<PageResult<ModelConfig>>('/model-configs', { params: { model_type: 'VIDEO', status: 'ENABLED', page_size: 100 } }),
-        http.get<PageResult<AiFile>>('/files', { params: { file_type: 'IMAGE', page_size: 100 } }),
-        http.get<PageResult<Script>>('/scripts', { params: { page_size: 100 } }),
-        http.get<PageResult<Storyboard>>('/storyboards', { params: { page_size: 200 } }),
+        modelConfigsApi.list({ model_type: 'VIDEO', status: 'ENABLED', page_size: 100 }),
+        filesApi.list({ file_type: 'IMAGE', page_size: 100 }),
+        scriptsApi.list({ page_size: 100 }),
+        storyboardsApi.list({ page_size: 200 }),
       ]),
     ])
-    files.value = fileResult.data.items
-    total.value = fileResult.data.total
-    projects.value = projectResult.data.items
-    prompts.value = promptResult.data.items
-    imageModels.value = modelResult.data.items
+    files.value = fileResult.items
+    total.value = fileResult.total
+    projects.value = projectResult.items
+    prompts.value = promptResult.items
+    imageModels.value = modelResult.items
     if (videoOptions) {
-      videoModels.value = videoOptions[0].data.items
-      libraryImages.value = videoOptions[1].data.items
-      scripts.value = videoOptions[2].data.items
-      storyboards.value = videoOptions[3].data.items
+      videoModels.value = videoOptions[0].items
+      libraryImages.value = videoOptions[1].items
+      scripts.value = videoOptions[2].items
+      storyboards.value = videoOptions[3].items
     }
   } catch (error) { ElMessage.error(errorMessage(error, `${noun.value}加载失败`)) } finally { loading.value = false }
 }
@@ -125,15 +132,18 @@ function toggleReferenceImage(fileId: number) {
 }
 
 async function submitVideoGeneration() {
-  if (!videoForm.storyboard_id || !videoForm.model_config_id) return ElMessage.warning('请选择分镜和视频模型')
+  const storyboardId = videoForm.storyboard_id
+  const modelConfigId = videoForm.model_config_id
+  if (!storyboardId || !modelConfigId) return ElMessage.warning('请选择分镜和视频模型')
   videoGenerating.value = true
   try {
-    await http.post(`/storyboards/${videoForm.storyboard_id}/generate-video`, {
-      model_config_id: videoForm.model_config_id,
+    await tasksApi.generateVideo({
+      storyboard_id: storyboardId,
+      model_config_id: modelConfigId,
       reference_file_ids: videoForm.reference_file_ids,
       duration: videoForm.duration,
       resolution: videoForm.resolution,
-      seed: videoForm.seed,
+      seed: videoForm.seed ?? undefined,
     })
     ElMessage.success('视频生成任务已加入队列')
     videoGenerateVisible.value = false
@@ -153,10 +163,12 @@ function promptChanged(promptId: number | null) {
 }
 
 async function submitGeneration() {
-  if (!generateForm.prompt_id || !generateForm.model_config_id || !generateForm.name.trim()) return ElMessage.warning('请选择提示词和图片模型，并填写图片名称')
+  const promptId = generateForm.prompt_id
+  const modelConfigId = generateForm.model_config_id
+  if (!promptId || !modelConfigId || !generateForm.name.trim()) return ElMessage.warning('请选择提示词和图片模型，并填写图片名称')
   generating.value = true
   try {
-    await http.post('/images/generate', { ...generateForm, name: generateForm.name.trim() })
+    await tasksApi.generateImage({ prompt_id: promptId, model_config_id: modelConfigId, project_id: generateForm.project_id, name: generateForm.name.trim(), size: generateForm.size })
     ElMessage.success('图片生成任务已加入队列')
     generateVisible.value = false
   } catch (error) { ElMessage.error(errorMessage(error, '创建图片任务失败')) } finally { generating.value = false }
@@ -168,10 +180,7 @@ async function submitUpload() {
   if (!raw.type.startsWith(isImage.value ? 'image/' : 'video/')) return ElMessage.warning(`请选择有效的${noun.value}文件`)
   uploading.value = true
   try {
-    const body = new FormData()
-    body.append('upload', raw)
-    if (uploadProjectId.value) body.append('project_id', String(uploadProjectId.value))
-    await http.post('/files/upload', body)
+    await filesApi.upload(raw, uploadProjectId.value)
     ElMessage.success(`${noun.value}上传成功`)
     uploadVisible.value = false
     uploadFiles.value = []
@@ -183,7 +192,7 @@ async function submitUpload() {
 async function rename(item: AiFile) {
   try {
     const result = await ElMessageBox.prompt('请输入新的显示名称', '重命名', { inputValue: item.file_name, inputPattern: /\S+/, inputErrorMessage: '名称不能为空' })
-    await http.put(`/files/${item.id}`, { file_name: result.value })
+    await renameStoredFile(item.id, result.value)
     ElMessage.success('名称已更新')
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
@@ -192,7 +201,7 @@ async function rename(item: AiFile) {
 async function remove(item: AiFile) {
   try {
     await ElMessageBox.confirm(`确定删除“${item.file_name}”吗？磁盘文件也会被移除。`, `删除${noun.value}`, { type: 'warning' })
-    await http.delete(`/files/${item.id}`)
+    await filesApi.remove(item)
     ElMessage.success(`${noun.value}已删除`)
     await loadData()
   } catch (error) { if (error !== 'cancel') ElMessage.error(errorMessage(error)) }
@@ -201,11 +210,17 @@ async function remove(item: AiFile) {
 function preview(item: AiFile) { previewFile.value = item; previewVisible.value = true }
 async function download(item: AiFile) {
   try {
-    const { data } = await http.get(`/files/${item.id}/download`, { responseType: 'blob' })
-    const link = document.createElement('a'); link.href = URL.createObjectURL(data); link.download = item.file_name; link.click(); URL.revokeObjectURL(link.href)
+    const href = publicUrl(item.storage_path)
+    if (!href) return ElMessage.warning('文件地址不可用')
+    const link = document.createElement('a'); link.href = href; link.download = item.file_name; link.target = '_blank'; link.rel = 'noopener'; link.click()
   } catch (error) { ElMessage.error(errorMessage(error, '下载失败')) }
 }
-async function copyUrl(item: AiFile) { await navigator.clipboard.writeText(`${window.location.origin}${item.url}`); ElMessage.success('地址已复制') }
+async function copyUrl(item: AiFile) {
+  const href = publicUrl(item.storage_path)
+  if (!href) return ElMessage.warning('文件地址不可用')
+  await navigator.clipboard.writeText(href)
+  ElMessage.success('地址已复制')
+}
 function search() { filters.page = 1; loadData() }
 watch(() => props.fileType, () => { filters.page = 1; loadData() })
 onActivated(loadData)
@@ -217,7 +232,7 @@ onActivated(loadData)
     <div class="filter-bar"><el-input v-model="filters.keyword" clearable :placeholder="`搜索${noun}名称`" style="width: 240px" :prefix-icon="Search" @keyup.enter="search" /><el-select v-model="filters.projectId" clearable placeholder="全部项目" style="width: 180px" @change="search"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select><el-select v-model="filters.sourceType" clearable placeholder="全部来源" style="width: 150px" @change="search"><el-option label="手动上传" value="UPLOAD" /><el-option v-if="isImage" label="AI 生成" value="AI_IMAGE" /><el-option v-else label="AI 生成" value="AI_VIDEO" /><el-option v-if="!isImage" label="视频合成" value="VIDEO_MERGE" /></el-select><el-button @click="search">查询</el-button></div>
     <section class="content-panel table-panel">
       <el-table v-loading="loading" :data="files" :empty-text="`暂无${noun}`">
-        <el-table-column label="预览" width="76"><template #default="{ row }"><el-image v-if="isImage" :src="row.url" fit="cover" class="asset-thumb" :preview-src-list="[row.url]" preview-teleported /><button v-else class="video-thumb" type="button" title="播放视频" @click="preview(row)"><el-icon><View /></el-icon></button></template></el-table-column>
+        <el-table-column label="预览" width="76"><template #default="{ row }"><el-image v-if="isImage" :src="publicUrl(row.storage_path)" fit="cover" class="asset-thumb" :preview-src-list="[publicUrl(row.storage_path)]" preview-teleported /><button v-else class="video-thumb" type="button" title="播放视频" @click="preview(row)"><el-icon><View /></el-icon></button></template></el-table-column>
         <el-table-column prop="file_name" :label="`${noun}名称`" min-width="220" show-overflow-tooltip />
         <el-table-column label="归属项目" min-width="150"><template #default="{ row }">{{ projectName(row.project_id) }}</template></el-table-column>
         <el-table-column label="规格" width="140"><template #default="{ row }"><span v-if="isImage && row.width">{{ row.width }} × {{ row.height }}</span><span v-else-if="!isImage && row.duration">{{ row.duration.toFixed(1) }} 秒</span><span v-else class="muted">未读取</span></template></el-table-column>
@@ -246,12 +261,12 @@ onActivated(loadData)
         <el-form-item label="视频模型" required><el-select v-model="videoForm.model_config_id" placeholder="请选择视频模型" style="width: 100%"><el-option v-for="item in videoModels" :key="item.id" :label="`${item.name} · ${item.model_name}`" :value="item.id" /></el-select></el-form-item>
         <div class="video-option-grid"><el-form-item label="视频时长（秒）"><el-input-number v-model="videoForm.duration" :min="1" :max="15" controls-position="right" style="width: 100%" /></el-form-item><el-form-item label="输出分辨率"><el-select v-model="videoForm.resolution" style="width: 100%"><el-option label="480p 竖屏" value="480p竖" /><el-option label="768p 竖屏" value="768p竖" /><el-option label="480p 横屏" value="480p横" /><el-option label="768p 横屏" value="768p横" /></el-select></el-form-item><el-form-item label="随机种子"><el-input-number v-model="videoForm.seed" placeholder="随机" controls-position="right" style="width: 100%" /></el-form-item></div>
         <el-form-item label="参考图片">
-          <div class="image-picker"><div class="image-picker-toolbar"><span>已选 {{ videoForm.reference_file_ids.length }} / {{ maxReferenceImages }}</span><el-button v-if="videoForm.reference_file_ids.length" text type="primary" @click="videoForm.reference_file_ids = []">清空</el-button></div><el-empty v-if="!libraryImages.length" description="图片库暂无图片" :image-size="68" /><div v-else class="image-option-grid"><button v-for="item in libraryImages" :key="item.id" class="image-option" :class="{ selected: selectedImageOrder(item.id) }" type="button" :aria-label="`${selectedImageOrder(item.id) ? '取消选择' : '选择'} ${item.file_name}`" @click="toggleReferenceImage(item.id)"><el-image :src="item.thumbnail_url || item.url" fit="cover" loading="lazy" /><span v-if="selectedImageOrder(item.id)" class="image-order">{{ selectedImageOrder(item.id) }}</span><span class="image-name" :title="item.file_name">{{ item.file_name }}</span></button></div></div>
+          <div class="image-picker"><div class="image-picker-toolbar"><span>已选 {{ videoForm.reference_file_ids.length }} / {{ maxReferenceImages }}</span><el-button v-if="videoForm.reference_file_ids.length" text type="primary" @click="videoForm.reference_file_ids = []">清空</el-button></div><el-empty v-if="!libraryImages.length" description="图片库暂无图片" :image-size="68" /><div v-else class="image-option-grid"><button v-for="item in libraryImages" :key="item.id" class="image-option" :class="{ selected: selectedImageOrder(item.id) }" type="button" :aria-label="`${selectedImageOrder(item.id) ? '取消选择' : '选择'} ${item.file_name}`" @click="toggleReferenceImage(item.id)"><el-image :src="publicUrl(item.thumbnail_path || item.storage_path)" fit="cover" loading="lazy" /><span v-if="selectedImageOrder(item.id)" class="image-order">{{ selectedImageOrder(item.id) }}</span><span class="image-name" :title="item.file_name">{{ item.file_name }}</span></button></div></div>
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="videoGenerateVisible = false">取消</el-button><el-button type="primary" :icon="VideoPlay" :loading="videoGenerating" @click="submitVideoGeneration">加入视频队列</el-button></template>
     </el-dialog>
-    <el-dialog v-model="previewVisible" :title="previewFile?.file_name" width="min(900px, calc(100vw - 32px))" destroy-on-close><div class="preview-stage"><img v-if="isImage && previewFile" :src="previewFile.url" :alt="previewFile.file_name" /><video v-else-if="previewFile" :src="previewFile.url" controls autoplay /></div></el-dialog>
+    <el-dialog v-model="previewVisible" :title="previewFile?.file_name" width="min(900px, calc(100vw - 32px))" destroy-on-close><div class="preview-stage"><img v-if="isImage && previewFile" :src="publicUrl(previewFile.storage_path)" :alt="previewFile.file_name" /><video v-else-if="previewFile" :src="publicUrl(previewFile.storage_path)" controls autoplay /></div></el-dialog>
   </div>
 </template>
 

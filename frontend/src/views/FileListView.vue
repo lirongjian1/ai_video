@@ -3,8 +3,15 @@ import { CopyDocument, Delete, Download, Edit, Plus, Search, View } from '@eleme
 import { ElMessage, ElMessageBox, type UploadUserFile } from 'element-plus'
 import { onActivated, reactive, ref } from 'vue'
 
-import { errorMessage, http } from '@/api/http'
-import type { AiFile, PageResult, Project } from '@/types'
+import { errorMessage, filesApi, projectsApi, publicUrl } from '@/api'
+import { supabase } from '@/lib/supabase'
+import type { AiFile, Project } from '@/types'
+
+/** filesApi 未暴露重命名方法，这里直接更新 files.file_name。 */
+async function renameStoredFile(id: number, fileName: string) {
+  const { error } = await supabase.from('files').update({ file_name: fileName }).eq('id', id)
+  if (error) throw new Error(error.message)
+}
 
 const loading = ref(false)
 const uploading = ref(false)
@@ -27,15 +34,13 @@ function fileSize(size: number) {
 async function loadFiles() {
   loading.value = true
   try {
-    const { data } = await http.get<PageResult<AiFile>>('/files', {
-      params: {
-        keyword: filters.keyword || undefined,
-        file_type: filters.fileType || undefined,
-        source_type: filters.sourceType || undefined,
-        project_id: filters.projectId || undefined,
-        page: filters.page,
-        page_size: filters.pageSize,
-      },
+    const data = await filesApi.list({
+      keyword: filters.keyword || undefined,
+      file_type: filters.fileType || undefined,
+      source_type: filters.sourceType || undefined,
+      project_id: filters.projectId || undefined,
+      page: filters.page,
+      page_size: filters.pageSize,
     })
     files.value = data.items
     total.value = data.total
@@ -48,7 +53,7 @@ async function loadFiles() {
 
 async function loadProjects() {
   try {
-    const { data } = await http.get<PageResult<Project>>('/projects', { params: { page_size: 100 } })
+    const data = await projectsApi.list({ page_size: 100 })
     projects.value = data.items
   } catch {
     projects.value = []
@@ -65,10 +70,7 @@ async function submitUpload() {
   if (!raw) return ElMessage.warning('请选择图片或视频')
   uploading.value = true
   try {
-    const body = new FormData()
-    body.append('upload', raw)
-    if (uploadProjectId.value) body.append('project_id', String(uploadProjectId.value))
-    await http.post('/files/upload', body)
+    await filesApi.upload(raw, uploadProjectId.value)
     ElMessage.success('文件上传成功')
     uploadVisible.value = false
     uploadFiles.value = []
@@ -88,7 +90,7 @@ async function renameFile(file: AiFile) {
       inputPattern: /\S+/,
       inputErrorMessage: '文件名不能为空',
     })
-    await http.put(`/files/${file.id}`, { file_name: result.value })
+    await renameStoredFile(file.id, result.value)
     ElMessage.success('文件已重命名')
     await loadFiles()
   } catch (error) {
@@ -99,7 +101,7 @@ async function renameFile(file: AiFile) {
 async function deleteFile(file: AiFile) {
   try {
     await ElMessageBox.confirm(`确定删除“${file.file_name}”吗？磁盘文件也会被移除。`, '删除文件', { type: 'warning' })
-    await http.delete(`/files/${file.id}`)
+    await filesApi.remove(file)
     ElMessage.success('文件已删除')
     await loadFiles()
   } catch (error) {
@@ -114,19 +116,23 @@ function showPreview(file: AiFile) {
 
 async function downloadFile(file: AiFile) {
   try {
-    const { data } = await http.get(`/files/${file.id}/download`, { responseType: 'blob' })
+    const href = publicUrl(file.storage_path)
+    if (!href) return ElMessage.warning('文件地址不可用')
     const link = document.createElement('a')
-    link.href = URL.createObjectURL(data)
+    link.href = href
     link.download = file.file_name
+    link.target = '_blank'
+    link.rel = 'noopener'
     link.click()
-    URL.revokeObjectURL(link.href)
   } catch (error) {
     ElMessage.error(errorMessage(error, '下载失败'))
   }
 }
 
 async function copyUrl(file: AiFile) {
-  await navigator.clipboard.writeText(`${window.location.origin}${file.url}`)
+  const href = publicUrl(file.storage_path)
+  if (!href) return ElMessage.warning('文件地址不可用')
+  await navigator.clipboard.writeText(href)
   ElMessage.success('地址已复制')
 }
 
@@ -161,7 +167,7 @@ onActivated(() => {
       <el-table v-loading="loading" :data="files" empty-text="暂无文件">
         <el-table-column label="预览" width="76">
           <template #default="{ row }">
-            <el-image v-if="row.file_type === 'IMAGE'" :src="row.url" fit="cover" class="file-thumb" :preview-src-list="[row.url]" preview-teleported />
+            <el-image v-if="row.file_type === 'IMAGE'" :src="publicUrl(row.storage_path)" fit="cover" class="file-thumb" :preview-src-list="[publicUrl(row.storage_path)]" preview-teleported />
             <button v-else class="video-thumb" type="button" title="播放视频" @click="showPreview(row)"><el-icon><View /></el-icon></button>
           </template>
         </el-table-column>
@@ -202,8 +208,8 @@ onActivated(() => {
 
     <el-dialog v-model="previewVisible" :title="previewFile?.file_name" width="min(900px, calc(100vw - 32px))" destroy-on-close>
       <div class="preview-stage">
-        <img v-if="previewFile?.file_type === 'IMAGE'" :src="previewFile.url" :alt="previewFile.file_name" />
-        <video v-else-if="previewFile" :src="previewFile.url" controls autoplay />
+        <img v-if="previewFile?.file_type === 'IMAGE'" :src="publicUrl(previewFile.storage_path)" :alt="previewFile.file_name" />
+        <video v-else-if="previewFile" :src="publicUrl(previewFile.storage_path)" controls autoplay />
       </div>
     </el-dialog>
   </div>

@@ -1,0 +1,57 @@
+# Supabase 项目配置（supabase CLI 使用）
+project_id = "ai-video-workflow"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[storage]
+enabled = true
+file_size_limit = "500MiB"
+
+[auth]
+enabled = true
+site_url = "http://127.0.0.1:5173"
+additional_redirect_urls = ["http://127.0.0.1:5173"]
+jwt_expiry = 720
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+inspector_port = 8083
+
+[functions.ai-text]
+verify_jwt = true
+
+[functions.ai-script]
+verify_jwt = true
+
+[functions.ai-image]
+verify_jwt = true
+
+[functions.ai-video-submit]
+verify_jwt = true
+
+[functions.ai-video-poll]
+verify_jwt = false
+
+[functions.model-test]
+verify_jwt = true
+
+[functions.admin-users]
+verify_jwt = true

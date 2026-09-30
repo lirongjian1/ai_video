@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { computed } from 'vue'
 
-import { errorMessage } from '@/api/http'
+import { errorMessage } from '@/api'
 import { useTaskStore } from '@/stores/tasks'
 import type { AiTask } from '@/types'
 

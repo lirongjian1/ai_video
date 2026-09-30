@@ -6,9 +6,11 @@ export interface PageResult<T> {
 }
 
 export interface User {
-  id: number
+  id: string
+  email: string
   username: string
   nickname: string
+  role: 'ADMIN' | 'USER'
   status: 'ENABLED' | 'DISABLED'
   last_login_time: string | null
   created_at: string
@@ -21,7 +23,7 @@ export interface Project {
   description: string | null
   cover_file_id: number | null
   status: 'ACTIVE' | 'ARCHIVED' | 'DISABLED'
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -34,16 +36,15 @@ export interface AiFile {
   file_type: 'IMAGE' | 'VIDEO'
   mime_type: string
   file_size: number
-  storage_type: string
+  storage_bucket: string
   storage_path: string
-  url: string
-  thumbnail_url: string | null
+  thumbnail_path: string | null
   width: number | null
   height: number | null
   duration: number | null
   source_type: 'UPLOAD' | 'AI_IMAGE' | 'AI_VIDEO' | 'VIDEO_MERGE'
   source_id: number | null
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -55,12 +56,26 @@ export interface ModelConfig {
   provider: string
   base_url: string | null
   model_name: string
-  has_api_key: boolean
-  api_key_masked: string | null
+  secret_ref: string | null
   extra_config: Record<string, unknown>
   status: 'ENABLED' | 'DISABLED'
   is_default: boolean
-  created_by: number
+  created_by: string
+  created_at: string
+  updated_at: string
+}
+
+/** 密钥（仅掩码，明文永远不返回前端） */
+export interface ApiSecret {
+  id: number
+  name: string
+  provider: string
+  description: string | null
+  /** 形如 sk-1***abcd，仅用于列表展示 */
+  masked: string
+  /** 模型配置通过它引用本密钥 */
+  secret_ref: string
+  status: 'ENABLED' | 'DISABLED'
   created_at: string
   updated_at: string
 }
@@ -74,7 +89,7 @@ export interface Prompt {
   negative_prompt: string | null
   variables: Record<string, unknown>
   status: 'ENABLED' | 'DISABLED'
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -89,7 +104,7 @@ export interface Character {
   reference_file_id: number | null
   prompt_id: number | null
   status: 'ACTIVE' | 'DISABLED'
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -104,7 +119,7 @@ export interface Scene {
   reference_file_id: number | null
   prompt_id: number | null
   status: 'ACTIVE' | 'DISABLED'
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -118,7 +133,7 @@ export interface Script {
   duration: number | null
   status: 'DRAFT' | 'READY' | 'ARCHIVED'
   storyboard_count: number
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -138,7 +153,7 @@ export interface Storyboard {
   character_ids: number[]
   reference_file_ids: number[]
   status: 'DRAFT' | 'READY' | 'GENERATED'
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }
@@ -153,12 +168,14 @@ export interface AiTask {
   model_config_id: number | null
   status: 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED'
   progress: number
+  provider_task_id: string | null
+  provider_status: string | null
   request_payload: Record<string, unknown>
   result_payload: Record<string, unknown>
   error_message: string | null
   started_at: string | null
   finished_at: string | null
-  created_by: number
+  created_by: string
   created_at: string
   updated_at: string
 }

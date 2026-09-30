@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router'
 
-import { tokenStorageKey } from '@/api/http'
+import { supabase } from '@/lib/supabase'
 import { pinia } from '@/stores'
 import { useTabsStore } from '@/stores/tabs'
 
@@ -23,6 +23,7 @@ const routes = [
       { path: 'videos', name: 'videos', component: () => import('@/views/AssetLibraryView.vue'), props: { fileType: 'VIDEO' }, meta: { title: '视频管理' } },
       { path: 'video-merge', name: 'video-merge', component: () => import('@/views/VideoMergeView.vue'), meta: { title: '视频合成' } },
       { path: 'models', name: 'models', component: () => import('@/views/ModelConfigView.vue'), meta: { title: '模型管理' } },
+      { path: 'secrets', name: 'secrets', component: () => import('@/views/SecretManageView.vue'), meta: { title: '密钥管理' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
@@ -30,11 +31,13 @@ const routes = [
 
 const router = createRouter({ history: createWebHistory(), routes })
 
-router.beforeEach((to) => {
-  if (!to.meta.public && !localStorage.getItem(tokenStorageKey)) {
+router.beforeEach(async (to) => {
+  const { data } = await supabase.auth.getSession()
+  const hasSession = Boolean(data.session)
+  if (!to.meta.public && !hasSession) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
-  if (to.name === 'login' && localStorage.getItem(tokenStorageKey)) return { name: 'dashboard' }
+  if (to.name === 'login' && hasSession) return { name: 'dashboard' }
 })
 
 router.afterEach((to: RouteLocationNormalized) => {
@@ -42,4 +45,3 @@ router.afterEach((to: RouteLocationNormalized) => {
 })
 
 export default router
-
