@@ -372,7 +372,7 @@ declare
   t text;
 begin
   foreach t in array array[
-    'projects', 'files', 'prompts',
+    'projects', 'files', 'prompts', 'model_configs',
     'characters', 'scenes', 'scripts', 'storyboards', 'tasks'
   ]
   loop
@@ -386,22 +386,6 @@ begin
   end loop;
 end;
 $$;
-
--- ------------------------------------------------------------
--- model_configs 单独处理：模型是全局共享资源
---   所有登录用户都能「读」（否则普通用户选不到模型，无法生成内容）
---   只有创建者和管理员能「写」
--- ------------------------------------------------------------
-drop policy if exists model_configs_read on public.model_configs;
-create policy model_configs_read on public.model_configs
-  for select to authenticated
-  using (true);
-
-drop policy if exists model_configs_write on public.model_configs;
-create policy model_configs_write on public.model_configs
-  for all to authenticated
-  using (created_by = auth.uid() or public.is_admin())
-  with check (created_by = auth.uid() or public.is_admin());
 
 -- ------------------------------------------------------------
 -- Storage 策略

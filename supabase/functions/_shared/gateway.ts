@@ -16,6 +16,8 @@ export interface ModelConfig {
   extra_config: Record<string, unknown>
   status: string
   is_default: boolean
+  /** 归属者（密钥按用户隔离，需要它来定位密钥） */
+  created_by?: string | null
 }
 
 const KNOWN_ENDPOINT_SUFFIXES = [
@@ -115,23 +117,37 @@ export interface SecretDb {
 }
 
 /** 解析密钥 + 组装请求头（异步，因为要从数据库取密钥）。 */
-async function buildHeaders(config: ModelConfig, db?: SecretDb): Promise<Record<string, string>> {
-  const key = await resolveApiKey(config, db)
+async function buildHeaders(
+  config: ModelConfig,
+  db?: SecretDb,
+  ownerId?: string,
+): Promise<Record<string, string>> {
+  const key = await resolveApiKey(config, db, ownerId)
   return headers(config, key)
 }
 
 /**
- * 取密钥：优先从数据库 api_secrets 表解密读取，回退到环境变量。
- * 需要传入 service_role 客户端以调用 get_api_secret_plain。
+ * 取密钥：从数据库 api_secrets 表解密读取（按归属者查找），回退到环境变量。
+ *
+ * 密钥按用户隔离，所以必须带上「模型配置的归属者」ownerId。
+ * 走 get_api_secret_plain_for(ref, owner) —— 只在该用户名下查找。
  */
 export async function resolveApiKey(
   config: ModelConfig,
   db?: SecretDb,
+  ownerId?: string,
 ): Promise<string> {
   const ref = config.secret_ref || `${config.provider.toUpperCase()}_API_KEY`
   if (db) {
-    const { data } = await db.rpc('get_api_secret_plain', { p_ref: ref })
-    if (typeof data === 'string' && data) return data
+    // 优先按归属者查找（密钥按用户隔离）
+    const owner = ownerId ?? config.created_by ?? undefined
+    if (owner) {
+      const { data } = await db.rpc('get_api_secret_plain_for', { p_ref: ref, p_owner: owner })
+      if (typeof data === 'string' && data) return data
+    }
+    // 兼容旧数据：仍尝试旧的全局查找
+    const { data: legacy } = await db.rpc('get_api_secret_plain', { p_ref: ref })
+    if (typeof legacy === 'string' && legacy) return legacy
   }
   return Deno.env.get(ref) ?? ''
 }
@@ -276,8 +292,9 @@ function decodeBase64(value: string, defaultMime: string): [Uint8Array, string] 
 export async function testModelConnection(
   config: ModelConfig,
   db?: SecretDb,
+  ownerId?: string,
 ): Promise<string> {
-  const hdrs = await buildHeaders(config, db)
+  const hdrs = await buildHeaders(config, db, ownerId)
 
   if (isComfyUiVideo(config) && !config.extra_config?.test_path) {
     const url = videoUrl(config, 'video_submit_path', '/videos/generations', '/video_generation', '/contents/generations/tasks', '{workflow_id}')
@@ -514,6 +531,7 @@ export async function pollVideoOnce(
   config: ModelConfig,
   providerTaskId: string,
   db?: SecretDb,
+  ownerId?: string,
 ): Promise<PollOutcome> {
   const isComfy = isComfyUiVideo(config)
   const statusUrl = videoUrl(
@@ -525,7 +543,7 @@ export async function pollVideoOnce(
     'result/{task_id}',
   ).replace('{task_id}', providerTaskId)
 
-  const response = await fetch(statusUrl, { headers: await buildHeaders(config, db) })
+  const response = await fetch(statusUrl, { headers: await buildHeaders(config, db, ownerId) })
   const pollData = await parseJson(response)
   if (isComfy && String(pollData.code ?? '').toLowerCase() !== 'success') {
     throw new ModelCallError(`视频工作流查询失败：${pollData.msg ?? pollData.code ?? '未知错误'}`)
@@ -564,7 +582,7 @@ export async function pollVideoOnce(
       '/files/{file_id}',
       'files/{file_id}',
     ).replace('{file_id}', String(fileId))
-    const fileResponse = await fetch(fileUrl, { headers: await buildHeaders(config, db) })
+    const fileResponse = await fetch(fileUrl, { headers: await buildHeaders(config, db, ownerId) })
     const fileData = await parseJson(fileResponse)
     const downloadUrl = nested(
       fileData,

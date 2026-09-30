@@ -23,7 +23,7 @@ const routes = [
       { path: 'videos', name: 'videos', component: () => import('@/views/AssetLibraryView.vue'), props: { fileType: 'VIDEO' }, meta: { title: '视频管理' } },
       { path: 'video-merge', name: 'video-merge', component: () => import('@/views/VideoMergeView.vue'), meta: { title: '视频合成' } },
       { path: 'models', name: 'models', component: () => import('@/views/ModelConfigView.vue'), meta: { title: '模型管理' } },
-      { path: 'secrets', name: 'secrets', component: () => import('@/views/SecretManageView.vue'), meta: { title: '密钥管理', adminOnly: true } },
+      { path: 'secrets', name: 'secrets', component: () => import('@/views/SecretManageView.vue'), meta: { title: '密钥管理' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },

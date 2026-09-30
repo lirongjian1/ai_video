@@ -20,8 +20,10 @@ Deno.serve(
       .eq('id', payload.model_config_id)
       .single()
     if (!configRow) return fail('模型配置不存在', 404)
+    // service_role 绕过 RLS，需自行校验归属
+    if (configRow.created_by !== user.id) return fail('模型配置不存在', 404)
 
-    const message = await testModelConnection(configRow as ModelConfig, db)
+    const message = await testModelConnection(configRow as ModelConfig, db, user.id)
     return json({ ok: true, message })
   }),
 )

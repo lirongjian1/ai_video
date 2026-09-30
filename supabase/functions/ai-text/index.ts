@@ -25,9 +25,15 @@ interface Payload {
   style?: string
 }
 
-async function loadConfig(db: ReturnType<typeof adminClient>, id: number): Promise<ModelConfig> {
+async function loadConfig(
+  db: ReturnType<typeof adminClient>,
+  id: number,
+  ownerId: string,
+): Promise<ModelConfig> {
   const { data, error } = await db.from('model_configs').select('*').eq('id', id).single()
   if (error || !data) throw new Error('模型配置不存在')
+  // service_role 会绕过 RLS，这里必须自行校验归属
+  if (data.created_by !== ownerId) throw new Error('模型配置不存在')
   if (data.status !== 'ENABLED') throw new Error('所选模型配置已停用')
   return data as ModelConfig
 }
@@ -42,8 +48,8 @@ Deno.serve(
 
     // ---- 连接测试 ----
     if (payload.action === 'connection-test') {
-      const config = await loadConfig(db, Number(payload.model_config_id))
-      const message = await testModelConnection(config, db)
+      const config = await loadConfig(db, Number(payload.model_config_id), user.id)
+      const message = await testModelConnection(config, db, user.id)
       return json({ ok: true, message })
     }
 
@@ -51,7 +57,7 @@ Deno.serve(
 
     // ---- 生成提示词 ----
     if (payload.action === 'generate-prompt') {
-      const config = await loadConfig(db, payload.model_config_id)
+      const config = await loadConfig(db, payload.model_config_id, user.id)
       if (config.model_type !== 'TEXT') return fail('请选择文本模型')
 
       const isCharacter = payload.generation_type === 'CHARACTER_THREE_VIEW'
@@ -124,7 +130,7 @@ Deno.serve(
 
     // ---- 生成六段分镜 ----
     if (payload.action === 'generate-script') {
-      const config = await loadConfig(db, payload.model_config_id)
+      const config = await loadConfig(db, payload.model_config_id, user.id)
       if (config.model_type !== 'TEXT') return fail('请选择文本模型')
       if (!payload.project_id) return fail('缺少 project_id')
 

@@ -30,10 +30,12 @@ Deno.serve(
 
     for (const task of tasks ?? []) {
       try {
+        // 只取任务归属者自己的模型配置，避免跨用户解析密钥
         const { data: configRow } = await db
           .from('model_configs')
           .select('*')
           .eq('id', task.model_config_id)
+          .eq('created_by', task.created_by)
           .single()
         if (!configRow) {
           await db
@@ -56,7 +58,7 @@ Deno.serve(
           continue
         }
 
-        const outcome = await pollVideoOnce(config, task.provider_task_id, db)
+        const outcome = await pollVideoOnce(config, task.provider_task_id, db, task.created_by)
 
         if (outcome.state === 'processing') {
           const pollCount = Number(task.result_payload?.poll_count ?? 0) + 1

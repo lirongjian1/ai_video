@@ -25,8 +25,8 @@ create table if not exists public.api_secrets (
   secret_cipher bytea not null,
   -- 掩码，供列表展示（如 sk-1***abcd）
   masked text not null default '',
-  -- 供 Edge Function 通过引用名读取
-  secret_ref text not null unique,
+  -- 供 Edge Function 通过引用名读取（按用户隔离：同一用户内唯一）
+  secret_ref text not null,
   status text not null default 'ENABLED' check (status in ('ENABLED', 'DISABLED')),
   created_by uuid not null references auth.users (id) on delete restrict,
   created_at timestamptz not null default now(),
@@ -35,6 +35,8 @@ create table if not exists public.api_secrets (
 
 create index if not exists ix_api_secrets_name on public.api_secrets (name);
 create index if not exists ix_api_secrets_ref on public.api_secrets (secret_ref);
+-- 引用名按用户唯一（不同用户可以各用一份同名密钥）
+create unique index if not exists uq_api_secrets_owner_ref on public.api_secrets (created_by, secret_ref);
 
 drop trigger if exists trg_api_secrets_touch on public.api_secrets;
 create trigger trg_api_secrets_touch before update on public.api_secrets
@@ -244,10 +246,19 @@ as $$
 declare
   v_cipher bytea;
   v_status text;
+  v_count int;
 begin
+  -- 密钥按用户隔离：同名引用若出现多条，则无法判断归属，放弃
+  -- （Edge Function 实际使用 get_api_secret_plain_for(ref, owner)）
+  select count(*) into v_count from public.api_secrets where secret_ref = p_ref;
+  if v_count <> 1 then
+    return null;
+  end if;
+
   select secret_cipher, status into v_cipher, v_status
   from public.api_secrets
-  where secret_ref = p_ref;
+  where secret_ref = p_ref
+  limit 1;
 
   if v_cipher is null then
     return null;

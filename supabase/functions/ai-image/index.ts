@@ -31,6 +31,8 @@ Deno.serve(
       .eq('id', payload.model_config_id)
       .single()
     if (!configRow) return fail('模型配置不存在', 404)
+    // service_role 绕过 RLS，需自行校验归属
+    if (configRow.created_by !== user.id) return fail('模型配置不存在', 404)
     if (configRow.status !== 'ENABLED') return fail('所选模型配置已停用', 409)
     if (configRow.model_type !== 'IMAGE') return fail('请选择图片模型')
     const config = configRow as ModelConfig
@@ -64,7 +66,11 @@ Deno.serve(
 
       let translated = false
       if (hasCjk(content)) {
-        const { data: allConfigs } = await db.from('model_configs').select('*')
+        // 翻译模型只在本人的配置里挑选，避免读到别人的模型
+        const { data: allConfigs } = await db
+          .from('model_configs')
+          .select('*')
+          .eq('created_by', user.id)
         const translationConfig = pickTranslationConfig(config, (allConfigs ?? []) as ModelConfig[])
         if (!translationConfig) throw new Error('检测到中文提示词，但没有可用文本模型执行英文转换')
         content = (
