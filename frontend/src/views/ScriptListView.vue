@@ -262,7 +262,7 @@ onActivated(loadData)
 
     <el-dialog v-model="videoDialogVisible" :title="videoTarget ? `生成视频 · ${videoTarget.title}` : '生成全部分镜视频'" width="min(760px, calc(100vw - 32px))" append-to-body>
       <el-form label-position="top">
-        <el-form-item label="视频模型" required><el-select v-model="videoForm.model_config_id" placeholder="请选择视频模型" style="width: 100%"><el-option v-for="item in videoModels" :key="item.id" :label="item.name" :value="item.id" /></el-select></el-form-item>
+        <el-form-item label="视频模型" required><el-select v-model="videoForm.model_config_id" placeholder="请选择视频模型" style="width: 100%"><el-option v-for="item in videoModels" :key="item.id" :label="`${item.name} · ${item.model_name}`" :value="item.id" /></el-select></el-form-item>
         <div class="video-option-grid">
           <el-form-item label="视频时长（秒）"><el-input-number v-model="videoForm.duration" :min="1" :max="15" controls-position="right" style="width: 100%" /></el-form-item>
           <el-form-item label="输出分辨率"><el-select v-model="videoForm.resolution" style="width: 100%"><el-option label="480p 竖屏" value="480p竖" /><el-option label="768p 竖屏" value="768p竖" /><el-option label="480p 横屏" value="480p横" /><el-option label="768p 横屏" value="768p横" /></el-select></el-form-item>

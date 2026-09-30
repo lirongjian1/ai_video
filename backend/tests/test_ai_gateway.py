@@ -271,11 +271,18 @@ def test_comfyui_video_submit_poll_and_download(monkeypatch) -> None:
     monkeypatch.setattr(ai_gateway.httpx, "AsyncClient", lambda **_: FakeClient())
     monkeypatch.setattr(ai_gateway.asyncio, "sleep", no_sleep)
 
+    config = _comfyui_config()
+    config.model_name = "minimax_h3_image_audio_to_video_v2_15s"
     content, mime_type = asyncio.run(
         ai_gateway.generate_video(
-            _comfyui_config(),
+            config,
             "云端漫步的小猫",
-            duration=10,
+            duration=15,
+            image_data_urls=[
+                "data:image/png;base64,AAAA",
+                "data:image/webp;base64,BBBB",
+            ],
+            request_options={"resolution": "480p横", "seed": 12345},
             on_submitted=lambda task_id: captured.update(task_id=task_id),
             on_poll=lambda status, index: captured["statuses"].append((status, index)),
         )
@@ -284,13 +291,16 @@ def test_comfyui_video_submit_poll_and_download(monkeypatch) -> None:
     assert content == b"comfyui-video"
     assert mime_type == "video/mp4"
     assert captured["post_url"].endswith(
-        "/comfyui/comfyui_workflow/minimax_h3_lightx2v_no_pic"
+        "/comfyui/comfyui_workflow/minimax_h3_image_audio_to_video_v2_15s"
     )
     assert captured["headers"]["Authorization"] == "test-token"
     assert captured["payload"] == {
         "prompt": "云端漫步的小猫",
-        "duration": 10,
-        "resolution": "768p竖",
+        "duration": 15,
+        "resolution": "480p横",
+        "seed": 12345,
+        "ref_image_0": "data:image/png;base64,AAAA",
+        "ref_image_1": "data:image/webp;base64,BBBB",
     }
     assert captured["task_id"] == "task-1"
     assert captured["statuses"] == [("success", 1)]

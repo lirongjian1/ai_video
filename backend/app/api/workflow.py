@@ -535,16 +535,17 @@ async def generate_script(
     db.commit()
     db.refresh(task)
     system_prompt = (
-        "You are a short-video director and storyboard artist. Turn the user's description "
-        "into a continuous 60-second story with exactly six shots of 10 seconds each. "
-        "All natural-language values must be written in Simplified Chinese. Output strict "
-        "JSON only, without Markdown. The required structure is: "
+        "你是一名短视频导演和分镜师。请把用户描述改编为连续的 60 秒故事，严格拆分为 "
+        "6 个分镜，每个分镜 10 秒。所有自然语言字段必须使用简体中文，不得输出英文提示词。"
+        "仅输出严格 JSON，不要使用 Markdown。JSON 结构必须为："
         '{"summary":"故事摘要","content":"完整故事梗概","shots":['
         '{"sequence":1,"title":"镜头标题","description":"画面描述","camera":"景别和运镜",'
         '"dialogue":"台词或旁白","video_prompt":"可直接交给视频模型的完整提示词"}]}. '
-        "The shots array must contain exactly six items numbered 1 through 6. Keep adult "
-        "character appearance, setting, and narrative continuity consistent. Each "
-        "video_prompt must include subject movement, environment, camera, lighting, and style."
+        "shots 数组必须正好包含 6 项，sequence 从 1 到 6。人物或动物主体的外貌、体型、"
+        "毛色、发型、服装、配饰以及场景布局必须在全部分镜中保持一致。每个 video_prompt "
+        "必须是完整中文句子，并以‘严格参考所提供的人物、动物主体和场景参考图，保持主体"
+        "身份、外貌、造型与场景一致’开头，再描述主体动作、环境、景别、运镜、光线和视觉"
+        "风格；不要写 8K、超高清等与工作流分辨率参数冲突的词。"
     )
     user_prompt = payload.keywords
     if payload.style:
@@ -747,7 +748,7 @@ def create_video_generation(
     db: DbSession,
 ) -> AiTask:
     storyboard = _require(db, AiStoryboard, record_id, "分镜")
-    _require_model_config(db, payload.model_config_id, "VIDEO")
+    config = _require_model_config(db, payload.model_config_id, "VIDEO")
     if not (storyboard.video_prompt or storyboard.description):
         raise HTTPException(status_code=400, detail="请先填写分镜的视频提示词或画面描述")
     reference_file_ids = list(dict.fromkeys(payload.reference_file_ids))
@@ -755,10 +756,24 @@ def create_video_generation(
         reference_file_ids.insert(0, payload.reference_file_id)
     if len(reference_file_ids) > 9:
         raise HTTPException(status_code=400, detail="参考图片最多选择 9 张")
+    is_comfyui = (
+        str(config.extra_config.get("protocol", "")).upper() == "COMFYUI"
+        or "/comfyui/comfyui_workflow" in (config.base_url or "").lower()
+    )
+    if reference_file_ids and is_comfyui and "no_pic" in config.model_name.lower():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "当前工作流不支持参考图片，请在模型管理中将工作流 ID 改为 "
+                "minimax_h3_image_audio_to_video_v2_15s"
+            ),
+        )
     for reference_file_id in reference_file_ids:
         reference = _require(db, AiFile, reference_file_id, "参考图片")
         if reference.file_type != "IMAGE":
             raise HTTPException(status_code=400, detail="参考文件必须是图片")
+        if reference.mime_type.lower() not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(status_code=400, detail="参考图片仅支持 JPG、PNG 或 WebP 格式")
     storyboard.reference_file_ids = reference_file_ids
     task = AiTask(
         project_id=storyboard.project_id,

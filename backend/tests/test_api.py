@@ -180,7 +180,7 @@ def test_ai_generation_workflow(
     client: TestClient, auth_headers: dict[str, str], monkeypatch
 ) -> None:
     async def fake_text(_, system_prompt: str, __: str, **___) -> str:
-        if "exactly six shots" in system_prompt:
+        if "6 个分镜" in system_prompt:
             return """{
               "summary": "一次雪夜寻人",
               "content": "剑客进入古寺并找到线索。",
@@ -201,7 +201,10 @@ def test_ai_generation_workflow(
     async def fake_translation(*_, **__) -> str:
         return "adult swordsman character sheet, front side and rear views"
 
-    async def fake_video(*_, **__) -> tuple[bytes, str]:
+    video_calls: list[dict] = []
+
+    async def fake_video(_, prompt: str, **kwargs) -> tuple[bytes, str]:
+        video_calls.append({"prompt": prompt, **kwargs})
         return b"generated-video", "video/mp4"
 
     monkeypatch.setattr("app.api.workflow.generate_text", fake_text)
@@ -277,6 +280,11 @@ def test_ai_generation_workflow(
         },
     )
     assert image_task.status_code == 201
+    reference_image = client.get(
+        "/api/v1/files",
+        headers=auth_headers,
+        params={"project_id": project["id"], "file_type": "IMAGE", "page_size": 100},
+    ).json()["items"][0]
 
     boards = client.get(
         "/api/v1/storyboards",
@@ -287,9 +295,30 @@ def test_ai_generation_workflow(
     video_task = client.post(
         f"/api/v1/storyboards/{boards[0]['id']}/generate-video",
         headers=auth_headers,
-        json={"model_config_id": video_model["id"]},
+        json={
+            "model_config_id": video_model["id"],
+            "reference_file_ids": [reference_image["id"]],
+            "duration": 15,
+            "resolution": "480p横",
+            "seed": 12345,
+        },
     )
     assert video_task.status_code == 201
+    assert video_task.json()["request_payload"] == {
+        "reference_file_ids": [reference_image["id"]],
+        "duration": 15,
+        "resolution": "480p横",
+        "seed": 12345,
+    }
+    updated_board = client.get(
+        "/api/v1/storyboards",
+        headers=auth_headers,
+        params={"script_id": script.json()["id"]},
+    ).json()["items"][0]
+    assert updated_board["reference_file_ids"] == [reference_image["id"]]
+    assert "严格参考所提供的人物、动物主体和场景参考图" in video_calls[0]["prompt"]
+    assert "雪夜古寺" in video_calls[0]["prompt"]
+    assert video_calls[0]["image_data_urls"]
 
     generated_files = client.get(
         "/api/v1/files",

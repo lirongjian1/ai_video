@@ -28,13 +28,13 @@ MIME_EXTENSIONS = {
 _CJK_PATTERN = re.compile(r"[\u3400-\u9fff]")
 
 
-def _translation_model(db, image_config: AiModelConfig) -> AiModelConfig:
-    configured_id = image_config.extra_config.get("translation_model_config_id")
+def _translation_model(db, media_config: AiModelConfig) -> AiModelConfig:
+    configured_id = media_config.extra_config.get("translation_model_config_id")
     if configured_id:
         config = db.get(AiModelConfig, int(configured_id))
         if config and config.model_type == "TEXT" and config.status == "ENABLED":
             return config
-        raise RuntimeError("图片模型配置的翻译模型不可用")
+        raise RuntimeError("模型配置的翻译模型不可用")
     config = db.scalar(
         select(AiModelConfig)
         .where(AiModelConfig.model_type == "TEXT", AiModelConfig.status == "ENABLED")
@@ -64,6 +64,35 @@ async def _prepare_image_prompt(
         temperature=0.2,
     )
     return translated.strip(), True
+
+
+async def _prepare_video_prompt(
+    db, video_config: AiModelConfig, content: str, has_references: bool
+) -> tuple[str, bool]:
+    prepared = content.strip()
+    translated = False
+    if not _CJK_PATTERN.search(prepared):
+        prepared = (
+            await generate_text(
+                _translation_model(db, video_config),
+                (
+                    "请把用户的视频生成提示词准确翻译并整理为简体中文，保留主体、动作、"
+                    "场景、景别、运镜、光线和视觉风格。不要解释，不要补充英文，只输出一段"
+                    "可以直接提交给视频模型的中文提示词。"
+                ),
+                prepared,
+                temperature=0.2,
+            )
+        ).strip()
+        translated = True
+    if has_references and "严格参考所提供的" not in prepared:
+        reference_instruction = (
+            "严格参考所提供的人物、动物主体和场景参考图，保持主体身份、外貌、体型、"
+            "毛色、发型、服装、配饰，以及场景布局、色彩和光线一致；不得擅自替换主体、"
+            "改变造型或重构场景。"
+        )
+        prepared = f"{reference_instruction}\n{prepared}"
+    return prepared, translated
 
 
 def _save_media(data: bytes, mime_type: str, media_type: str, name: str) -> tuple[str, Path]:
@@ -202,6 +231,18 @@ async def run_video_generation(task_id: int) -> None:
             task.status = "RUNNING"
             task.progress = 10
             task.started_at = datetime.now()
+            db.commit()
+
+            prompt, translated = await _prepare_video_prompt(
+                db, config, prompt, bool(image_data_urls)
+            )
+            task.progress = 15
+            task.result_payload = {
+                **(task.result_payload or {}),
+                "provider_prompt": prompt,
+                "prompt_translated": translated,
+                "reference_image_count": len(image_data_urls),
+            }
             db.commit()
 
             def cancelled() -> bool:
